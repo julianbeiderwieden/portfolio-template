@@ -3,11 +3,11 @@ import '../styles/global.css';
 import { ClientRouter } from 'astro:transitions';
 import SiteNav from '../components/SiteNav.astro';
 import Figure from '../components/Figure.astro';
+import Theme from '../components/Theme.astro';
 import { getSettings, getProjectList, imageUrl, type ImageAsset } from '../utils/sanity';
 import { faviconPath } from '../utils/favicon';
 import { absoluteUrl } from '../utils/seo';
 import { currentPath, isProjectsPath } from '../utils/nav';
-import { themeColor } from '../utils/theme';
 
 interface Props {
   title?: string;
@@ -31,6 +31,8 @@ const previews = isProjectsPath(path)
 const fav = settings?.favicon;
 const siteTitle = settings?.title ?? 'Portfolio';
 const language = settings?.language ?? 'en';
+const theme = settings?.theme ?? 'system';
+const themeToggle = settings?.themeToggle !== false;
 const ogRegion = (() => {
   try {
     return new Intl.Locale(language).maximize().region;
@@ -64,14 +66,14 @@ const websiteJsonLd = {
 ---
 
 <!doctype html>
-<html lang={language} class="md:overscroll-none">
+<html lang={language} class="md:overscroll-none" data-theme={theme === 'system' ? undefined : theme}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <Theme theme={theme} toggle={themeToggle} />
     <meta name="generator" content={Astro.generator} />
     <meta name="application-name" content={siteTitle} />
     <meta name="apple-mobile-web-app-title" content={siteTitle} />
-    <meta name="theme-color" content={themeColor} />
     <link rel="preload" href="/fonts/OverusedGrotesk-VF.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preconnect" href="https://cdn.sanity.io" />
     <title>{pageTitle}</title>
@@ -125,6 +127,10 @@ const websiteJsonLd = {
         [data-fade] {
           opacity: 1 !important;
         }
+        /* The Appearance button needs the theme script. */
+        [data-theme-toggle] {
+          display: none;
+        }
       </style></noscript
     >
     <slot name="head" />
@@ -140,7 +146,12 @@ const websiteJsonLd = {
       Skip to content
     </a>
     <div class="min-h-dvh md:grid md:grid-cols-2">
-      <SiteNav siteTitle={siteTitle} projects={projects} navFooterText={settings?.navFooterText} />
+      <SiteNav
+        siteTitle={siteTitle}
+        projects={projects}
+        navFooterText={settings?.navFooterText}
+        themeToggle={themeToggle}
+      />
       <main
         id="content"
         class="group grid min-w-0 border-t border-divider px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:border-t-0 md:border-l md:px-5 md:pt-5 md:pb-5"

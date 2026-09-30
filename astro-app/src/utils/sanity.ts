@@ -1,6 +1,7 @@
 import { sanityClient } from 'sanity:client';
 import groq from 'groq';
 import type { PortableTextBlock } from '@portabletext/types';
+import type { SiteTheme } from './theme';
 
 export { sanityClient };
 
@@ -36,6 +37,9 @@ export interface Settings {
   socialImage?: ImageAsset;
   /** Shown above Imprint / Privacy in the site nav */
   navFooterText?: string;
+  theme?: SiteTheme;
+  /** Appearance button next to Imprint / Privacy; `false` hides it. */
+  themeToggle?: boolean;
 }
 
 export interface ProjectListItem {
@@ -194,6 +198,8 @@ export async function getSettings(): Promise<Settings | null> {
       openGraphDescription,
       socialImageAlt,
       navFooterText,
+      theme,
+      themeToggle,
       "favicon": favicon.asset->{ url, mimeType },
       "socialImage": socialImage.asset->{ url, mimeType }
     }`,

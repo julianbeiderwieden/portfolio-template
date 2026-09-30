@@ -6,9 +6,11 @@ interface Props {
   siteTitle: string;
   projects: ProjectListItem[];
   navFooterText?: string;
+  /** Appearance button next to the legal links, switching between light and dark (script in Theme.astro). */
+  themeToggle: boolean;
 }
 
-const { siteTitle, projects, navFooterText } = Astro.props;
+const { siteTitle, projects, navFooterText, themeToggle } = Astro.props;
 const path = currentPath(Astro.url);
 const projectsActive = isProjectsPath(path);
 
@@ -93,20 +95,31 @@ const navLinkClass = (state: LinkState) =>
     </ul>
   </nav>
 
-  <nav aria-label="Legal" class="mt-8 md:mt-auto md:pt-8">
+  <div class="mt-8 md:mt-auto md:pt-8">
     {navFooterText && <p class="mb-4 whitespace-pre-line text-xs leading-none text-foreground">{navFooterText}</p>}
-    <ul class="flex gap-x-4 text-xs leading-none">
+    <div class="flex gap-x-4 text-xs leading-none">
+      <nav aria-label="Legal">
+        <ul class="flex gap-x-4">
+          {
+            legalLinks.map(link => (
+              <li>
+                <a href={link.href} class={legalLinkClass} aria-current={path === link.href ? 'page' : undefined}>
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
       {
-        legalLinks.map(link => (
-          <li>
-            <a href={link.href} class={legalLinkClass} aria-current={path === link.href ? 'page' : undefined}>
-              {link.label}
-            </a>
-          </li>
-        ))
+        themeToggle && (
+          <button type="button" class:list={[legalLinkClass, 'cursor-pointer']} data-theme-toggle>
+            Appearance
+          </button>
+        )
       }
-    </ul>
-  </nav>
+    </div>
+  </div>
 </header>
 
 <script>

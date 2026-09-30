@@ -1,12 +1,13 @@
 import type { APIRoute } from 'astro';
 import { getSettings } from '../utils/sanity';
 import { faviconPath } from '../utils/favicon';
-import { themeColor } from '../utils/theme';
+import { fixedTheme, themeColors } from '../utils/theme';
 
 export const GET: APIRoute = async () => {
   const settings = await getSettings();
   const fav = settings?.favicon;
   const title = settings?.title ?? 'Portfolio';
+  const themeColor = themeColors[fixedTheme(settings?.theme ?? 'system')];
 
   const manifest = {
     name: title,

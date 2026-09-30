@@ -51,6 +51,33 @@ export default defineType({
       group: 'general',
     }),
     defineField({
+      name: 'theme',
+      title: 'Theme',
+      type: 'string',
+      description:
+        'Colors of the website. System follows the light or dark setting of the visitor’s device.',
+      options: {
+        list: [
+          {title: 'Light', value: 'light'},
+          {title: 'Dark', value: 'dark'},
+          {title: 'System', value: 'system'},
+        ],
+        layout: 'radio',
+        direction: 'horizontal',
+      },
+      initialValue: 'system',
+      group: 'general',
+    }),
+    defineField({
+      name: 'themeToggle',
+      title: 'Appearance button',
+      type: 'boolean',
+      description:
+        'Shows “Appearance” next to Imprint and Privacy. Visitors can switch between light and dark with it; their choice is remembered in their browser.',
+      initialValue: true,
+      group: 'general',
+    }),
+    defineField({
       name: 'seoTitle',
       title: 'SEO title',
       type: 'string',

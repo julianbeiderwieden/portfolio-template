@@ -1,0 +1,73 @@
+---
+/** The theme-color meta tag and the script that sets the theme. Render once, in <head>, before any content. */
+import { fixedTheme, themeColors, type SiteTheme } from '../utils/theme';
+
+interface Props {
+  theme: SiteTheme;
+  /** Whether the Appearance button is shown; without it, a choice stored earlier is ignored. */
+  toggle: boolean;
+}
+
+const { theme, toggle } = Astro.props;
+---
+
+<meta name="theme-color" content={themeColors[fixedTheme(theme)]} />
+{/* Inline and blocking, so the page never shows the wrong theme first. Runs once: page swaps keep it. */}
+<script is:inline define:vars={{ siteTheme: theme, toggle, colors: themeColors }}>
+  const KEY = 'theme';
+  const root = document.documentElement;
+  const deviceDark = matchMedia('(prefers-color-scheme: dark)');
+  const siteDefault = () => (siteTheme === 'system' ? (deviceDark.matches ? 'dark' : 'light') : siteTheme);
+
+  function storedChoice() {
+    if (!toggle) return undefined;
+    try {
+      const value = localStorage.getItem(KEY);
+      return value === 'light' || value === 'dark' ? value : undefined;
+    } catch {
+      return undefined; // Storage blocked: the choice lasts until the next reload.
+    }
+  }
+
+  /** The visitor's choice with the Appearance button, if it differs from the site's default. */
+  let choice = storedChoice();
+
+  function apply(doc) {
+    const theme = choice ?? siteDefault();
+    doc.documentElement.dataset.theme = theme;
+    doc.querySelector('meta[name="theme-color"]')?.setAttribute('content', colors[theme]);
+  }
+
+  // Everything switches in one frame: color transitions (links, buttons) would otherwise trail behind.
+  function switchTheme() {
+    const style = document.createElement('style');
+    style.textContent = '*,*::before,*::after{transition:none!important}';
+    document.head.append(style);
+    apply(document);
+    void document.body.offsetHeight; // Restyle while transitions are off.
+    style.remove();
+  }
+
+  apply(document);
+
+  // A page swap takes <html>'s attributes and the head from the new page: give it the theme first.
+  document.addEventListener('astro:before-swap', event => apply(event.newDocument));
+  deviceDark.addEventListener('change', switchTheme);
+  addEventListener('storage', event => {
+    if (event.key !== KEY && event.key !== null) return;
+    choice = storedChoice();
+    switchTheme();
+  });
+
+  document.addEventListener('click', event => {
+    if (!event.target.closest?.('[data-theme-toggle]')) return;
+    const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    // Back on the default, the choice is dropped, so the site follows the Settings (and device) again.
+    choice = next === siteDefault() ? undefined : next;
+    try {
+      if (choice) localStorage.setItem(KEY, choice);
+      else localStorage.removeItem(KEY);
+    } catch {}
+    switchTheme();
+  });
+</script>

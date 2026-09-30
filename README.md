@@ -121,14 +121,14 @@ Reload the website to see the changes. Then continue with [Deployment](#deployme
 
 Every change must be **published** (button at the bottom right of the document) before it appears on the website.
 
-| Studio entry | Page               | Content                                                   |
-| ------------ | ------------------ | --------------------------------------------------------- |
-| **Projects** | `/projects/<slug>` | One document per project                                  |
-| **About**    | `/about`           | Rich text                                                 |
-| **Contact**  | `/contact`         | Rich text                                                 |
-| **Imprint**  | `/imprint`         | Title and rich text                                       |
-| **Privacy**  | `/privacy`         | Title and rich text                                       |
-| **Settings** | all pages          | Site title, language, favicon, SEO and link preview texts |
+| Studio entry | Page               | Content                                                          |
+| ------------ | ------------------ | ---------------------------------------------------------------- |
+| **Projects** | `/projects/<slug>` | One document per project                                         |
+| **About**    | `/about`           | Rich text                                                        |
+| **Contact**  | `/contact`         | Rich text                                                        |
+| **Imprint**  | `/imprint`         | Title and rich text                                              |
+| **Privacy**  | `/privacy`         | Title and rich text                                              |
+| **Settings** | all pages          | Site title, language, favicon, theme, SEO and link preview texts |
 
 About, Contact, Imprint, Privacy and Settings exist exactly once and cannot be deleted. A page without content shows "This page has no content yet."
 
@@ -191,6 +191,8 @@ A **Video** block plays an uploaded video file (MP4 with H.264 works in every br
 | General        | Language               | `lang` attribute, `og:locale`, manifest. Does not translate the navigation labels (see [Text in the code](#text-in-the-code)).                                       |
 | General        | Navigation footer text | Optional small text above the Imprint and Privacy links. Line breaks are kept.                                                                                       |
 | General        | Favicon                | Icon for the browser tab, home screen and `favicon.ico`. Square SVG, or square PNG of at least 512 × 512 px.                                                         |
+| General        | Theme                  | **Light**, **Dark** or **System** (follows the light or dark setting of the visitor's device). Default: System                                                       |
+| General        | Appearance button      | Shows "Appearance" next to Imprint and Privacy. A click switches between light and dark; the choice is remembered in the visitor's browser. Default: on              |
 | SEO            | SEO title              | Title of the home page in search results and the browser tab. Falls back to the site title. Other pages use `<page title> – <site title>`.                           |
 | SEO            | Meta Description       | Description for search results. Used on every page that has no own description.                                                                                      |
 | SEO            | Site URL               | Address of the live site, e.g. `https://example.com`. Required for canonical URLs, `sitemap.xml`, the sitemap line in `robots.txt` and `og:url`.                     |
@@ -202,7 +204,7 @@ A **Video** block plays an uploaded video file (MP4 with H.264 works in every br
 
 ### Colors
 
-All colors are defined in the `@theme` block in `astro-app/src/styles/global.css`:
+All colors are defined in the `@theme` block in `astro-app/src/styles/global.css`, each with a value for the light and the dark theme: `light-dark(<light>, <dark>)`, in hex or `oklch()`, e.g. `light-dark(oklch(98.5% 0 none), oklch(14.5% 0 none))`. The `theme-color` meta tag and the manifest get the background as hex, converted during the build.
 
 | Token                 | Used for                                                             |
 | --------------------- | -------------------------------------------------------------------- |
@@ -213,6 +215,8 @@ All colors are defined in the `@theme` block in `astro-app/src/styles/global.css
 | `--color-placeholder` | Background behind images while they load                             |
 
 Use them as Tailwind classes, e.g. `bg-background`, `text-muted`. Tailwind's default colors are disabled (`--color-*: initial`), so classes such as `text-red-500` do not exist.
+
+The theme (Settings, Appearance button) is set as `data-theme="light"` or `"dark"` on `<html>` by a small script in `astro-app/src/components/Theme.astro`, before the page is shown. Tailwind's `dark:` variant follows it, e.g. `dark:hidden`.
 
 ### Font and text sizes
 
@@ -228,13 +232,13 @@ Text sizes: `--text-body` (main text, scales with the window width), `--text-col
 
 Interface texts are in English and set in the code:
 
-| Text                                                   | File                                              |
-| ------------------------------------------------------ | ------------------------------------------------- |
-| Navigation: Projects, About, Contact, Imprint, Privacy | `astro-app/src/components/SiteNav.astro`          |
-| "Skip to content" link                                 | `astro-app/src/layouts/Layout.astro`              |
-| "No projects published yet."                           | `astro-app/src/components/CoverSlideshow.astro`   |
-| "This page has no content yet.", fallback page titles  | `about.astro`, `contact.astro`, `LegalPage.astro` |
-| 404 page                                               | `astro-app/src/pages/404.astro`                   |
+| Text                                                               | File                                              |
+| ------------------------------------------------------------------ | ------------------------------------------------- |
+| Navigation: Projects, About, Contact, Imprint, Privacy, Appearance | `astro-app/src/components/SiteNav.astro`          |
+| "Skip to content" link                                             | `astro-app/src/layouts/Layout.astro`              |
+| "No projects published yet."                                       | `astro-app/src/components/CoverSlideshow.astro`   |
+| "This page has no content yet.", fallback page titles              | `about.astro`, `contact.astro`, `LegalPage.astro` |
+| 404 page                                                           | `astro-app/src/pages/404.astro`                   |
 
 To change a URL (e.g. `/imprint` → `/impressum`), rename the file in `astro-app/src/pages/` and update the link in `SiteNav.astro` and the entry in `astro-app/src/pages/sitemap.xml.ts`.
 
