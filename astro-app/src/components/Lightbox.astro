@@ -1,6 +1,10 @@
 ---
 /** Enlarges every <Figure zoomable /> on the page. Render once per page. */
 import IconButton from './IconButton.astro';
+
+// The images sit on a strip that slides sideways: the current one, its two neighbors, and a spare, so a new
+// slide can start while the last one is still moving without an image vanishing.
+const slots = 4;
 ---
 
 <dialog
@@ -8,18 +12,27 @@ import IconButton from './IconButton.astro';
   aria-label="Image viewer"
   data-lightbox
 >
-  <div class="absolute inset-0 bg-background/80 opacity-0 backdrop-blur-md" data-lightbox-backdrop></div>
-  <div
-    class="absolute origin-top-left bg-placeholder bg-(image:--lqip) bg-cover has-[[data-lightbox-full][data-loaded]]:bg-none"
-    data-lightbox-frame
-  >
-    <img class="absolute inset-0 size-full" alt="" data-lightbox-preview />
-    <img
-      class="absolute inset-0 size-full opacity-0 transition-opacity duration-200 data-loaded:opacity-100"
-      alt=""
-      decoding="async"
-      data-lightbox-full
-    />
+  <div class="absolute inset-0 bg-background opacity-0" data-lightbox-backdrop></div>
+  <div class="absolute inset-0" data-lightbox-track>
+    {
+      Array.from({ length: slots }, () => (
+        <div class="absolute inset-0" data-lightbox-slot>
+          <div
+            class="absolute origin-top-left bg-placeholder bg-(image:--lqip) bg-cover has-[[data-lightbox-full][data-loaded]]:bg-none"
+            data-lightbox-frame
+          >
+            <img class="absolute inset-0 size-full" alt="" data-lightbox-preview />
+            <img
+              class="absolute inset-0 size-full opacity-0 transition-opacity duration-200 data-loaded:opacity-100"
+              alt=""
+              decoding="async"
+              data-lightbox-full
+            />
+          </div>
+          <p class="absolute text-meta text-muted transition-opacity duration-150" hidden data-lightbox-caption />
+        </div>
+      ))
+    }
   </div>
   <div
     class="pointer-events-none absolute inset-[env(safe-area-inset-top)_env(safe-area-inset-right)_env(safe-area-inset-bottom)_env(safe-area-inset-left)]"
@@ -27,7 +40,6 @@ import IconButton from './IconButton.astro';
   >
     {/* The area the enlarged image is fitted into, clear of the controls. */}
     <div class="absolute inset-x-4 inset-y-18 md:inset-x-20 md:inset-y-5" data-lightbox-stage></div>
-    <p class="absolute text-meta text-muted transition-opacity duration-150" hidden data-lightbox-caption></p>
     <IconButton
       icon="close"
       label="Close"
@@ -55,18 +67,44 @@ import IconButton from './IconButton.astro';
 </dialog>
 
 <script>
-  import { onHorizontalSwipe } from '../utils/swipe';
-
   type Rect = { left: number; top: number; width: number; height: number };
+
+  type Slot = {
+    el: HTMLElement;
+    frame: HTMLElement;
+    preview: HTMLImageElement;
+    full: HTMLImageElement;
+    caption: HTMLElement;
+    /** Position on the strip, counted from the image the lightbox opened with; unset while unused. */
+    pos?: number;
+    target: Rect;
+    /** The running fade and blur, kept in step with the strip's slide. */
+    fades: Animation[];
+  };
 
   // iOS-like curve: fast start for instant feedback, long soft landing.
   const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+  // How much faster than its average speed a slide with EASE starts: the curve's initial slope.
+  const EASE_START_SPEED = 0.72 / 0.32;
   const OPEN_MS = 400;
   const CLOSE_MS = 300;
   // Reduced motion: crossfade only, no movement.
   const FADE_MS = 200;
-  // Zooming in or out, and springing back after a drag that didn't close.
+  // Zooming in or out, springing back after a drag that didn't close, settling a strip that was let go.
   const SETTLE_MS = 300;
+  // Sliding to the next image with the buttons or arrow keys: moving across the screen, so a gentle ease-in-out
+  // (EASE would jump off at twice its average speed). Swipes keep EASE, which picks up the finger's speed.
+  const SLIDE_EASE = 'cubic-bezier(0.45, 0, 0.2, 1)';
+  const SLIDE_MS = 450;
+  // After a swipe, the slide takes as long as keeps the finger's speed, within these bounds.
+  const SWIPE_MIN_MS = 240;
+  const SWIPE_MAX_MS = 520;
+  // A swipe turns to the next image past this share of the width (capped in px), or as a flick (px per ms).
+  const PAGE_DISTANCE = 0.25;
+  const PAGE_MAX_DISTANCE = 120;
+  const PAGE_VELOCITY = 0.3;
+  // Shorter swipes may still end in a click, so they never flick.
+  const FLICK_MIN_DISTANCE = 20;
   // Space between image and caption, as in Figure (mt-2).
   const CAPTION_GAP = 8;
   // Zooming that adds less than this isn't worth it; such images close on click instead.
@@ -78,6 +116,10 @@ import IconButton from './IconButton.astro';
   const DISMISS_VELOCITY = 0.11;
   // Movement that makes a touch a drag rather than a tap.
   const DRAG_THRESHOLD = 8;
+  // An image is fully faded out this far from the middle, in image widths: before it has slid out completely.
+  const FADE_DISTANCE = 0.55;
+  // It blurs as it fades, up to this many px there. Blur on large images is costly, in Safari especially.
+  const MAX_BLUR = 8;
 
   const transition = (duration: number, ...properties: string[]) =>
     properties.map(property => `${property} ${duration}ms ${EASE}`).join(', ');
@@ -100,36 +142,92 @@ import IconButton from './IconButton.astro';
     });
     if (!dialog || items.length === 0) return;
 
-    const part = <T extends Element = HTMLElement>(name: string) => dialog.querySelector<T>(`[data-lightbox-${name}]`)!;
+    const part = <T extends Element = HTMLElement>(name: string, parent: ParentNode = dialog) =>
+      parent.querySelector<T>(`[data-lightbox-${name}]`)!;
     const backdrop = part('backdrop');
-    const frame = part('frame');
-    const preview = part<HTMLImageElement>('preview');
+    const track = part('track');
     const ui = part('ui');
     const stage = part('stage');
-    const caption = part('caption');
     const status = part('status');
     const prev = part<HTMLButtonElement>('prev');
     const next = part<HTMLButtonElement>('next');
-    let full = part<HTMLImageElement>('full');
-    const fullTemplate = full.cloneNode() as HTMLImageElement;
+    const slots: Slot[] = [...dialog.querySelectorAll<HTMLElement>('[data-lightbox-slot]')].map(el => ({
+      el,
+      frame: part('frame', el),
+      preview: part<HTMLImageElement>('preview', el),
+      full: part<HTMLImageElement>('full', el),
+      caption: part('caption', el),
+      target: { left: 0, top: 0, width: 0, height: 0 },
+      fades: [],
+    }));
+    const captions = slots.map(slot => slot.caption);
+    const fullTemplate = slots[0].full.cloneNode() as HTMLImageElement;
     const root = document.documentElement;
 
     let state: 'closed' | 'opening' | 'open' | 'closing' = 'closed';
+    /** The image the lightbox opened with: strip positions count from it. */
+    let start = 0;
+    /** The strip position shown, or being slid to, and the image there. */
+    let view = 0;
     let current = 0;
-    let target: Rect = { left: 0, top: 0, width: 0, height: 0 };
+    /** One image's share of the strip: the viewport's width. */
+    let pageWidth = innerWidth;
+    let sliding = false;
+    let slideTimer: number | undefined;
     let morph = true;
     let closeTimer: number | undefined;
     /** Zoomed in: the scale, and where the image's top left corner sits in the viewport. */
     let zoom: { scale: number; x: number; y: number } | undefined;
     let zoomedAt = 0;
-    /** A touch in progress: where it started, and once it moved, along which axis (or panning the zoom). */
-    let gesture: { x: number; y: number; time: number; axis?: 'x' | 'y'; pan?: { x: number; y: number } } | undefined;
+    /**
+     * A touch in progress: where it started, where the strip was, and once it moved, along which axis (or panning
+     * the zoom). The last 100ms of positions give the speed when it lets go.
+     */
+    let gesture:
+      | {
+          x: number;
+          y: number;
+          time: number;
+          stripX: number;
+          samples: { x: number; t: number }[];
+          axis?: 'x' | 'y';
+          pan?: { x: number; y: number };
+        }
+      | undefined;
     /** A drag can still end in a click; ignore clicks until then. */
     let ignoreClicksUntil = 0;
     const controller = new AbortController();
     const { signal } = controller;
 
     prev.hidden = next.hidden = items.length < 2;
+
+    const itemAt = (pos: number) => (((start + pos) % items.length) + items.length) % items.length;
+    const slotAt = (pos: number) => slots.find(slot => slot.pos === pos);
+    const currentSlot = () => slotAt(view)!;
+    /** The strip's resting place for the current image. */
+    const restX = () => -view * pageWidth;
+    /** Opacity by signed distance from the middle, in image widths: full in the middle, gone at FADE_DISTANCE. */
+    const fadeAt = (distance: number) => Math.max(0, 1 - Math.abs(distance) / FADE_DISTANCE);
+    /** Blur by the same distance: sharp in the middle, MAX_BLUR from FADE_DISTANCE on. */
+    const blurAt = (distance: number) => Math.min(1, Math.abs(distance) / FADE_DISTANCE) * MAX_BLUR;
+
+    /** Sets a slot's opacity and blur for the strip at `x`: on the slot, and the blur on image and caption only. */
+    function applyFade(slot: Slot, x: number) {
+      const distance = slot.pos! + x / pageWidth;
+      const blur = blurAt(distance);
+      slot.el.style.opacity = String(fadeAt(distance));
+      slot.frame.style.filter = slot.caption.style.filter = blur ? `blur(${blur}px)` : '';
+    }
+
+    function stopFades(slot: Slot) {
+      for (const animation of slot.fades) animation.cancel();
+      slot.fades = [];
+    }
+    /** Where the strip is right now, mid-slide included. */
+    function stripX() {
+      const transform = getComputedStyle(track).transform;
+      return transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41;
+    }
 
     /**
      * Largest rect with the image's aspect ratio that fits the stage, never past its original size.
@@ -147,44 +245,171 @@ import IconButton from './IconButton.astro';
       return { left: area.left + (area.width - width) / 2, top: area.top + (areaHeight - height) / 2, width, height };
     }
 
-    /** Fits the current image with its caption below, wrapped to the image's width like on the page. */
-    function layout() {
-      const { thumb, caption: text } = items[current];
-      caption.textContent = text;
-      caption.hidden = !text;
-      target = fit(thumb);
+    /** Puts the image at strip position `pos` into `slot`: the loaded thumbnail at once, the sharp file on top. */
+    function setContent(slot: Slot, pos: number) {
+      const { trigger, thumb, caption: text } = items[itemAt(pos)];
+      slot.pos = pos;
+      slot.el.hidden = false;
+      slot.el.style.transform = `translateX(${pos * pageWidth}px)`;
+      slot.frame.style.transition = 'none';
+      slot.frame.style.transform = slot.frame.style.opacity = '';
+      slot.caption.style.removeProperty('transition');
+      slot.caption.style.opacity = '';
+      slot.caption.textContent = text;
+      slot.caption.hidden = !text;
+      if (!thumb.currentSrc) slot.preview.removeAttribute('src');
+      else if (slot.preview.src !== thumb.currentSrc) slot.preview.src = thumb.currentSrc;
+      // The page's blurred preview, only while there is no loaded file to show (and gone once the sharp one is in).
+      slot.frame.style.setProperty('--lqip', thumb.currentSrc ? '' : trigger.style.getPropertyValue('--lqip'));
+
+      // A fresh element, so a stale load can't reveal the wrong image and `load` fires even when cached.
+      const image = fullTemplate.cloneNode() as HTMLImageElement;
+      image.alt = thumb.alt;
+      image.addEventListener('load', () => image.toggleAttribute('data-loaded', true), { once: true });
+      slot.full.replaceWith(image);
+      slot.full = image;
+    }
+
+    /** Fits a slot's image with its caption below, wrapped to the image's width like on the page. */
+    function layoutSlot(slot: Slot) {
+      const { thumb, caption: text } = items[itemAt(slot.pos!)];
+      let target = fit(thumb);
 
       // A taller caption shrinks the image, which narrows the caption again: settle in a few passes.
       let reserve = 0;
       for (let pass = 0; text && pass < 3; pass++) {
-        caption.style.width = `${target.width}px`;
-        const height = caption.offsetHeight + CAPTION_GAP;
+        slot.caption.style.width = `${target.width}px`;
+        const height = slot.caption.offsetHeight + CAPTION_GAP;
         if (height === reserve) break;
         reserve = height;
         target = fit(thumb, reserve);
       }
 
-      frame.style.left = `${target.left}px`;
-      frame.style.top = `${target.top}px`;
-      frame.style.width = `${target.width}px`;
-      frame.style.height = `${target.height}px`;
+      slot.target = target;
+      slot.frame.style.left = `${target.left}px`;
+      slot.frame.style.top = `${target.top}px`;
+      slot.frame.style.width = `${target.width}px`;
+      slot.frame.style.height = `${target.height}px`;
+      slot.caption.style.left = `${target.left}px`;
+      slot.caption.style.top = `${target.top + target.height + CAPTION_GAP}px`;
+      slot.caption.style.width = `${target.width}px`;
 
-      const origin = ui.getBoundingClientRect();
-      caption.style.left = `${target.left - origin.left}px`;
-      caption.style.top = `${target.top + target.height + CAPTION_GAP - origin.top}px`;
-      caption.style.width = `${target.width}px`;
+      // The sharp file for the fitted width, asked for again with a larger one when the window grows.
+      slot.full.sizes = `${Math.ceil(target.width)}px`;
+      if (!slot.full.getAttribute('src')) {
+        slot.full.srcset = thumb.srcset;
+        slot.full.src = thumb.src;
+      }
     }
 
-    /** The thumbnail's already loaded file shows instantly while the sharp one loads on top. */
-    function setPreview(thumb: HTMLImageElement) {
-      if (!thumb.currentSrc) preview.removeAttribute('src');
-      else if (preview.src !== thumb.currentSrc) preview.src = thumb.currentSrc;
+    /** Fills the positions around `view` into slots, reusing ones that are neither needed nor on screen at `x`. */
+    function fillSlots(x: number) {
+      const needed = items.length > 1 ? [view - 1, view, view + 1] : [view];
+      const onScreen = (pos: number) => Math.abs(pos + x / pageWidth) < 1;
+      for (const pos of needed) {
+        if (slotAt(pos)) continue;
+        const spare =
+          slots.find(slot => slot.pos === undefined) ??
+          slots.find(slot => !needed.includes(slot.pos!) && !onScreen(slot.pos!)) ??
+          // Only when slides start in very quick succession: the one farthest away.
+          slots
+            .filter(slot => !needed.includes(slot.pos!))
+            .sort((a, b) => Math.abs(b.pos! - view) - Math.abs(a.pos! - view))[0];
+        setContent(spare, pos);
+        stopFades(spare);
+        applyFade(spare, x);
+        layoutSlot(spare);
+      }
+      // Screen readers get the current image only.
+      for (const slot of slots) slot.el.setAttribute('aria-hidden', String(slot.pos !== view));
     }
 
-    function loadFull(thumb: HTMLImageElement, width: number, image: HTMLImageElement) {
-      image.sizes = `${Math.ceil(width)}px`;
-      image.srcset = thumb.srcset;
-      image.src = thumb.src;
+    /** Makes the image at `view` the current one. */
+    function setCurrent({ scroll }: { scroll: boolean }) {
+      items[current].trigger.style.visibility = '';
+      current = itemAt(view);
+      const { trigger, thumb, caption: text } = items[current];
+      // Scroll the page behind the backdrop to this image, so closing lands on it.
+      const rect = thumb.getBoundingClientRect();
+      if (scroll && (rect.top < 0 || rect.bottom > innerHeight)) {
+        thumb.scrollIntoView({ block: 'center', behavior: 'instant' });
+      }
+      if (morph) trigger.style.visibility = 'hidden';
+      // Lets a slideshow switch to the slide holding this image.
+      document.dispatchEvent(new CustomEvent('lightbox:change', { detail: { trigger } }));
+      const description = [thumb.alt, text].filter(Boolean).join('. ');
+      status.textContent = `Image ${current + 1} of ${items.length}${description ? `: ${description}` : ''}`;
+      updateCursor();
+    }
+
+    /**
+     * The image sliding out fades and blurs, the one coming in sharpens and gains opacity, while the strip moves from
+     * `fromX` to `toX`. Both bend where they reach their limits, so they get keyframes at exactly those points and the
+     * strip's curve and duration: they stay in step with the movement all the way.
+     */
+    function fadeSlots(fromX: number, toX: number, duration: number, easing = EASE) {
+      for (const slot of slots) {
+        stopFades(slot);
+        if (slot.pos === undefined) continue;
+        applyFade(slot, toX);
+        if (!duration) continue;
+
+        const from = slot.pos + fromX / pageWidth;
+        const to = slot.pos + toX / pageWidth;
+        const offsets = [0, 1];
+        for (const bend of [-FADE_DISTANCE, 0, FADE_DISTANCE]) {
+          const offset = (bend - from) / (to - from);
+          if (offset > 0 && offset < 1) offsets.push(offset);
+        }
+        offsets.sort((a, b) => a - b);
+        const at = (offset: number) => from + (to - from) * offset;
+        const timing = { duration, easing };
+        const blur = offsets.map(offset => ({ offset, filter: `blur(${blurAt(at(offset))}px)` }));
+        slot.fades = [
+          slot.el.animate(
+            offsets.map(offset => ({ offset, opacity: fadeAt(at(offset)) })),
+            timing,
+          ),
+          slot.frame.animate(blur, timing),
+          slot.caption.animate(blur, timing),
+        ];
+      }
+    }
+
+    /** Slides the strip to `view`. Transitions retarget, so this also carries on from mid-slide or a drag. */
+    function slide(duration: number, easing = EASE) {
+      clearTimeout(slideTimer);
+      sliding = duration > 0;
+      const fromX = stripX();
+      track.style.transition = sliding ? `transform ${duration}ms ${easing}` : 'none';
+      track.style.transform = `translateX(${restX()}px)`;
+      fadeSlots(fromX, restX(), sliding ? duration : 0, easing);
+      if (sliding) slideTimer = window.setTimeout(() => (sliding = false), duration);
+    }
+
+    /** Puts the strip at `x` directly: following a finger, or caught mid-slide. */
+    function moveStrip(x: number) {
+      track.style.transition = 'none';
+      track.style.transform = `translateX(${x}px)`;
+      fadeSlots(x, x, 0);
+    }
+
+    /** Turns to the next or previous image, sliding on from wherever the strip is at `x`. */
+    function turn(step: 1 | -1, x: number, duration: number, easing = EASE) {
+      zoomOut(false);
+      view += step;
+      fillSlots(x);
+      setCurrent({ scroll: true });
+      slide(duration, easing);
+    }
+
+    function go(step: 1 | -1) {
+      if (state !== 'open' || items.length < 2) return;
+      const x = stripX();
+      // A held arrow key repeats faster than the strip slides: wait until it is within an image of its target,
+      // so the images it still has to pass are never recycled.
+      if (Math.abs(x - restX()) >= pageWidth) return;
+      turn(step, x, morph ? SLIDE_MS : 0, SLIDE_EASE);
     }
 
     /** How far the current image can grow before it turns soft: to its original width, at most the largest file. */
@@ -192,23 +417,25 @@ import IconButton from './IconButton.astro';
       const { thumb } = items[current];
       const files = [...thumb.srcset.matchAll(/(\d+)w/g)].map(match => Number(match[1]));
       const largest = Math.min(Number(thumb.getAttribute('width')) || Infinity, Math.max(...files, 0) || Infinity);
-      return Math.min(largest / target.width, MAX_ZOOM);
+      return Math.min(largest / currentSlot().target.width, MAX_ZOOM);
     }
 
     const canZoom = () => zoomScale() >= MIN_ZOOM;
 
     function updateCursor() {
-      frame.style.cursor = zoom ? 'zoom-out' : canZoom() ? 'zoom-in' : '';
+      currentSlot().frame.style.cursor = zoom ? 'zoom-out' : canZoom() ? 'zoom-in' : '';
     }
 
     function applyZoom() {
-      if (zoom)
-        frame.style.transform = `translate(${zoom.x - target.left}px, ${zoom.y - target.top}px) scale(${zoom.scale})`;
+      if (!zoom) return;
+      const { frame, target } = currentSlot();
+      frame.style.transform = `translate(${zoom.x - target.left}px, ${zoom.y - target.top}px) scale(${zoom.scale})`;
     }
 
     /** Keeps the zoomed image covering the viewport, or centered along an axis where it is smaller. */
     function clampZoom() {
       if (!zoom) return;
+      const { target } = currentSlot();
       const width = target.width * zoom.scale;
       const height = target.height * zoom.scale;
       zoom.x = width > innerWidth ? Math.min(0, Math.max(innerWidth - width, zoom.x)) : (innerWidth - width) / 2;
@@ -218,6 +445,7 @@ import IconButton from './IconButton.astro';
     /** The pointer's position across the viewport picks the part of the image shown: left edge, left side. */
     function panTo(clientX: number, clientY: number) {
       if (!zoom) return;
+      const { target } = currentSlot();
       zoom.x = (innerWidth - target.width * zoom.scale) * (clientX / innerWidth);
       zoom.y = (innerHeight - target.height * zoom.scale) * (clientY / innerHeight);
       clampZoom();
@@ -225,10 +453,12 @@ import IconButton from './IconButton.astro';
     }
 
     function zoomIn(clientX: number, clientY: number) {
+      const { frame, full, caption, target } = currentSlot();
       zoom = { scale: zoomScale(), x: 0, y: 0 };
       zoomedAt = performance.now();
       full.sizes = `${Math.ceil(target.width * zoom.scale)}px`; // Fetches a sharper file where there is one.
       frame.style.transition = transition(SETTLE_MS, 'transform');
+      caption.style.removeProperty('transition');
       caption.style.opacity = '0';
       panTo(clientX, clientY);
       updateCursor();
@@ -237,40 +467,12 @@ import IconButton from './IconButton.astro';
     function zoomOut(animate = true) {
       if (!zoom) return;
       zoom = undefined;
+      const { frame, caption } = currentSlot();
       frame.style.transition = animate ? transition(SETTLE_MS, 'transform') : 'none';
       frame.style.transform = '';
+      caption.style.removeProperty('transition');
       caption.style.opacity = '';
       updateCursor();
-    }
-
-    function show(index: number) {
-      const { trigger, thumb, caption: text } = items[index];
-      zoomOut(false);
-      current = index;
-      // Lets a slideshow switch to the slide holding this image.
-      document.dispatchEvent(new CustomEvent('lightbox:change', { detail: { trigger } }));
-      layout();
-      setPreview(thumb);
-      // The page's blurred preview, only while there is no loaded file to show (and gone once the sharp one is in).
-      frame.style.setProperty('--lqip', thumb.currentSrc ? '' : trigger.style.getPropertyValue('--lqip'));
-
-      // A fresh element, so a stale load can't reveal the wrong image and `load` fires even when cached.
-      const image = fullTemplate.cloneNode() as HTMLImageElement;
-      image.alt = thumb.alt;
-      image.addEventListener('load', () => image.toggleAttribute('data-loaded', true), { once: true });
-      loadFull(thumb, target.width, image);
-      full.replaceWith(image);
-      full = image;
-      updateCursor();
-
-      const description = [thumb.alt, text].filter(Boolean).join('. ');
-      status.textContent = `Image ${index + 1} of ${items.length}${description ? `: ${description}` : ''}`;
-      if (items.length > 1) {
-        for (const step of [-1, 1]) {
-          const neighbor = items[(index + step + items.length) % items.length].thumb;
-          loadFull(neighbor, fit(neighbor).width, new Image());
-        }
-      }
     }
 
     function lockScroll() {
@@ -289,95 +491,140 @@ import IconButton from './IconButton.astro';
     async function open(index: number) {
       if (state !== 'closed') return;
       state = 'opening';
-      const { trigger, thumb } = items[index];
-      setPreview(thumb);
-      await preview.decode().catch(() => {});
+      start = index;
+      view = 0;
+      // Slots from last time stay hidden until filled again.
+      for (const slot of slots) {
+        slot.pos = undefined;
+        slot.el.hidden = true;
+      }
+      const slot = slots[0];
+      setContent(slot, 0);
+      await slot.preview.decode().catch(() => {});
       if (state !== 'opening') return;
 
       morph = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const from = thumb.getBoundingClientRect();
+      const from = items[index].thumb.getBoundingClientRect();
       lockScroll();
       dialog!.showModal();
-      show(index);
+      pageWidth = dialog!.clientWidth;
+      slide(0);
+      layoutSlot(slot);
+      fillSlots(0);
+      fadeSlots(0, 0, 0);
+      setCurrent({ scroll: false });
 
       // Start exactly on top of the thumbnail, then grow into place.
-      frame.style.transition = backdrop.style.transition = ui.style.transition = 'none';
-      backdrop.style.opacity = ui.style.opacity = '0';
-      if (morph) {
-        frame.style.transform = flip(from, target);
-        trigger.style.visibility = 'hidden';
-      } else {
-        frame.style.opacity = '0';
-      }
-      frame.getBoundingClientRect(); // Commit the start state so the change below transitions.
+      const chrome = [ui, ...captions];
+      slot.frame.style.transition = backdrop.style.transition = 'none';
+      for (const el of chrome) el.style.transition = 'none';
+      backdrop.style.opacity = '0';
+      for (const el of chrome) el.style.opacity = '0';
+      if (morph) slot.frame.style.transform = flip(from, slot.target);
+      else slot.frame.style.opacity = '0';
+      slot.frame.getBoundingClientRect(); // Commit the start state so the change below transitions.
 
       const duration = morph ? OPEN_MS : FADE_MS;
-      frame.style.transition = transition(duration, 'transform', 'opacity');
-      backdrop.style.transition = ui.style.transition = transition(duration, 'opacity');
-      frame.style.transform = frame.style.opacity = '';
-      backdrop.style.opacity = ui.style.opacity = '1';
+      slot.frame.style.transition = transition(duration, 'transform', 'opacity');
+      backdrop.style.transition = transition(duration, 'opacity');
+      for (const el of chrome) el.style.transition = transition(duration, 'opacity');
+      slot.frame.style.transform = slot.frame.style.opacity = '';
+      backdrop.style.opacity = '1';
+      for (const el of chrome) el.style.opacity = '1';
       state = 'open';
-    }
-
-    function go(step: number) {
-      if (state !== 'open' || items.length < 2) return;
-      items[current].trigger.style.visibility = '';
-      const index = (current + step + items.length) % items.length;
-      const { trigger, thumb } = items[index];
-
-      // Scroll the page behind the backdrop to this image, so closing lands on it.
-      const rect = thumb.getBoundingClientRect();
-      if (rect.top < 0 || rect.bottom > innerHeight) thumb.scrollIntoView({ block: 'center', behavior: 'instant' });
-      if (morph) trigger.style.visibility = 'hidden';
-
-      // Switching is frequent and often keyboard-driven: no animation.
-      frame.style.transition = 'none';
-      frame.style.transform = '';
-      show(index);
     }
 
     function close() {
       if (state !== 'open') return;
       state = 'closing';
       zoom = undefined;
-      const { thumb } = items[current];
+      const { frame, target } = currentSlot();
       const duration = morph ? CLOSE_MS : FADE_MS;
+
+      // Mid-slide, the strip finishes sliding to rest alongside, and the image sliding out fades away.
+      slide(morph && Math.abs(stripX() - restX()) > 0.5 ? duration : 0);
+      for (const slot of slots) {
+        if (slot.frame === frame) continue;
+        slot.frame.style.transition = transition(duration, 'opacity');
+        slot.frame.style.opacity = '0';
+      }
 
       // Transitions retarget from wherever the image is: mid-opening, zoomed in or dragged down.
       frame.style.transition = transition(duration, 'transform', 'opacity');
       backdrop.style.transition = transition(duration, 'opacity');
-      ui.style.transition = transition(Math.min(duration, 150), 'opacity');
-      if (morph) frame.style.transform = flip(thumb.getBoundingClientRect(), target);
+      for (const el of [ui, ...captions]) {
+        el.style.transition = transition(Math.min(duration, 150), 'opacity');
+        el.style.opacity = '0';
+      }
+      if (morph) frame.style.transform = flip(items[current].thumb.getBoundingClientRect(), target);
       else frame.style.opacity = '0';
-      backdrop.style.opacity = ui.style.opacity = '0';
+      backdrop.style.opacity = '0';
       closeTimer = window.setTimeout(finish, duration);
     }
 
     function finish() {
       clearTimeout(closeTimer);
+      clearTimeout(slideTimer);
       if (state === 'closed') return;
       const wasShown = state !== 'opening';
       state = 'closed';
       zoom = undefined;
       gesture = undefined;
+      sliding = false;
 
       const { trigger } = items[current];
       trigger.style.visibility = '';
       if (dialog!.open) dialog!.close();
       unlockScroll();
-      for (const el of [frame, backdrop, ui]) el.style.removeProperty('transition');
-      frame.style.transform = frame.style.opacity = backdrop.style.opacity = ui.style.opacity = '';
-      caption.style.opacity = '';
+      for (const el of [backdrop, ui, track]) el.style.removeProperty('transition');
+      backdrop.style.opacity = ui.style.opacity = track.style.transform = '';
+      for (const slot of slots) {
+        stopFades(slot);
+        slot.el.style.opacity = slot.frame.style.filter = slot.caption.style.filter = '';
+        slot.frame.style.removeProperty('transition');
+        slot.frame.style.transform = slot.frame.style.opacity = '';
+        slot.caption.style.removeProperty('transition');
+        slot.caption.style.opacity = '';
+      }
       if (wasShown) trigger.focus({ preventScroll: true });
       document.dispatchEvent(new CustomEvent('lightbox:change', { detail: {} }));
     }
 
     /** After a drag down that didn't close: back into place. */
     function springBack() {
+      const { frame, caption } = currentSlot();
       frame.style.transition = transition(SETTLE_MS, 'transform');
-      backdrop.style.transition = ui.style.transition = transition(SETTLE_MS, 'opacity');
+      backdrop.style.transition = ui.style.transition = caption.style.transition = transition(SETTLE_MS, 'opacity');
       frame.style.transform = '';
-      backdrop.style.opacity = ui.style.opacity = '1';
+      backdrop.style.opacity = ui.style.opacity = caption.style.opacity = '1';
+    }
+
+    /** A sideways drag let go: on to the next or previous image, or back. */
+    function release(touch: NonNullable<typeof gesture>, clientX: number) {
+      const first = touch.samples[0];
+      const last = touch.samples[touch.samples.length - 1];
+      const velocity = last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0;
+      const dx = clientX - touch.x;
+      const x = stripX();
+
+      // The direction the finger meant: a flick decides, otherwise the distance dragged.
+      const threshold = Math.min(pageWidth * PAGE_DISTANCE, PAGE_MAX_DISTANCE);
+      const flick = Math.abs(dx) >= FLICK_MIN_DISTANCE && Math.abs(velocity) > PAGE_VELOCITY;
+      const intent = flick ? -Math.sign(velocity) : Math.abs(dx) > threshold ? -Math.sign(dx) : 0;
+      // The image in that direction from where the strip is now. Pulling back from a half-shown neighbor lands on
+      // the current image rather than the one beyond; no intent lands on the nearest.
+      const position = -x / pageWidth;
+      const destination =
+        intent > 0 ? Math.floor(position) + 1 : intent < 0 ? Math.ceil(position) - 1 : Math.round(position);
+      const step = items.length > 1 ? Math.max(-1, Math.min(1, destination - view)) : 0;
+      if (!step) return slide(SETTLE_MS);
+
+      // Keep the finger's speed: an EASE slide starts EASE_START_SPEED times faster than its average.
+      const remaining = Math.abs(-(view + step) * pageWidth - x);
+      const speed = Math.max(0, -step * velocity);
+      const matched = speed > 0 ? (EASE_START_SPEED * remaining) / speed : Infinity;
+      const duration = Math.min(SWIPE_MAX_MS, Math.max(SWIPE_MIN_MS, matched));
+      turn(step as 1 | -1, x, morph ? duration : Math.min(duration, FADE_MS));
     }
 
     items.forEach(({ trigger }, index) => trigger.addEventListener('click', () => open(index), { signal }));
@@ -390,11 +637,17 @@ import IconButton from './IconButton.astro';
       'click',
       event => {
         const element = event.target as Element;
-        if (state !== 'open' || element.closest('[data-lightbox-control]') || performance.now() < ignoreClicksUntil) {
+        if (
+          state !== 'open' ||
+          sliding ||
+          element.closest('[data-lightbox-control]') ||
+          performance.now() < ignoreClicksUntil
+        ) {
           return;
         }
-        if (frame.contains(element) && zoom) zoomOut();
-        else if (frame.contains(element) && canZoom()) zoomIn(event.clientX, event.clientY);
+        const onImage = currentSlot().frame.contains(element);
+        if (onImage && zoom) zoomOut();
+        else if (onImage && canZoom()) zoomIn(event.clientX, event.clientY);
         else close();
       },
       { signal },
@@ -404,7 +657,7 @@ import IconButton from './IconButton.astro';
       event => {
         if (!zoom || event.pointerType !== 'mouse') return;
         // Glide along with the zoom-in, then follow the pointer directly.
-        if (performance.now() - zoomedAt > SETTLE_MS) frame.style.transition = 'none';
+        if (performance.now() - zoomedAt > SETTLE_MS) currentSlot().frame.style.transition = 'none';
         panTo(event.clientX, event.clientY);
       },
       { signal },
@@ -431,21 +684,46 @@ import IconButton from './IconButton.astro';
     // The browser can still force the dialog shut; restore the page if it does.
     dialog.addEventListener('close', finish, { signal });
 
-    // Not after a drag down: one diagonal gesture shouldn't switch the image and then close it.
-    onHorizontalSwipe(dialog, step => go(step), { signal, enabled: () => !zoom && gesture?.axis !== 'y' });
-
-    // Touch: drag the image down to close it, or move around in it while zoomed in.
+    // Touch: drag sideways to the next image, drag down to close, or move around in the image while zoomed in.
     dialog.addEventListener(
       'touchstart',
       event => {
-        // A second finger mid-drag ends the drag: put the image back rather than leave it half dragged.
+        // A second finger ends a drag: put things back rather than leave them half dragged or caught mid-slide.
         if (gesture?.axis === 'y' && !zoom) springBack();
+        if (gesture && gesture.axis !== 'y' && !zoom && Math.abs(stripX() - restX()) > 0.5) slide(SETTLE_MS);
+        // Taps on the buttons are theirs: they mustn't catch the strip mid-slide.
+        if ((event.target as Element).closest('[data-lightbox-control]')) {
+          gesture = undefined;
+          return;
+        }
         const touch = event.touches.length === 1 ? event.touches[0] : undefined;
         // A second finger means pinch-zoom, which the browser handles.
-        gesture =
-          touch && state === 'open' && (visualViewport?.scale ?? 1) <= 1
-            ? { x: touch.clientX, y: touch.clientY, time: event.timeStamp, pan: zoom && { x: zoom.x, y: zoom.y } }
-            : undefined;
+        if (!touch || state !== 'open' || (visualViewport?.scale ?? 1) > 1) {
+          gesture = undefined;
+          return;
+        }
+
+        // Catch the strip where it is, mid-slide included; it goes on from the image nearest that point.
+        const x = stripX();
+        if (sliding) {
+          clearTimeout(slideTimer);
+          sliding = false;
+          moveStrip(x);
+          const nearest = Math.round(-x / pageWidth);
+          if (nearest !== view) {
+            view = nearest;
+            fillSlots(x);
+            setCurrent({ scroll: true });
+          }
+        }
+        gesture = {
+          x: touch.clientX,
+          y: touch.clientY,
+          time: event.timeStamp,
+          stripX: x,
+          samples: [{ x: touch.clientX, t: event.timeStamp }],
+          pan: zoom && { x: zoom.x, y: zoom.y },
+        };
       },
       { signal, passive: true },
     );
@@ -458,27 +736,48 @@ import IconButton from './IconButton.astro';
         const dy = touch.clientY - gesture.y;
         if (!gesture.axis && Math.max(Math.abs(dx), Math.abs(dy)) > DRAG_THRESHOLD) {
           gesture.axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+          // Dragging down works from rest only: a strip caught mid-slide settles first.
+          if (gesture.axis === 'y' && !zoom && Math.abs(gesture.stripX - restX()) > 0.5) {
+            slide(SETTLE_MS);
+            gesture = undefined;
+            return;
+          }
         }
 
         if (zoom && gesture.pan) {
           event.preventDefault();
-          frame.style.transition = 'none';
+          currentSlot().frame.style.transition = 'none';
           zoom.x = gesture.pan.x + dx;
           zoom.y = gesture.pan.y + dy;
           clampZoom();
           applyZoom();
           return;
         }
+
+        if (gesture.axis === 'x') {
+          event.preventDefault();
+          // The strip follows the finger, at most one image from the current one, where the neighbors are filled.
+          // A single image has nowhere to go: resistance.
+          const x =
+            items.length > 1
+              ? Math.max(restX() - pageWidth, Math.min(restX() + pageWidth, gesture.stripX + dx))
+              : gesture.stripX + Math.sign(dx) * Math.sqrt(Math.abs(dx)) * 3;
+          moveStrip(x);
+          gesture.samples.push({ x: touch.clientX, t: event.timeStamp });
+          while (gesture.samples.length > 2 && event.timeStamp - gesture.samples[0].t > 100) gesture.samples.shift();
+          return;
+        }
         if (gesture.axis !== 'y') return;
 
         event.preventDefault();
         // Down follows the finger; up meets growing resistance instead of a hard stop.
+        const { frame, caption } = currentSlot();
         const offset = dy > 0 ? dy : -Math.sqrt(-dy) * 3;
         const progress = Math.min(1, Math.max(0, dy) / (innerHeight / 2));
-        frame.style.transition = backdrop.style.transition = ui.style.transition = 'none';
+        frame.style.transition = backdrop.style.transition = ui.style.transition = caption.style.transition = 'none';
         frame.style.transform = `translateY(${offset}px)`;
         backdrop.style.opacity = String(1 - progress);
-        ui.style.opacity = String(Math.max(0, 1 - progress * 2));
+        ui.style.opacity = caption.style.opacity = String(Math.max(0, 1 - progress * 2));
       },
       { signal, passive: false },
     );
@@ -487,11 +786,23 @@ import IconButton from './IconButton.astro';
       event => {
         const touch = gesture;
         gesture = undefined;
-        if (!touch?.axis) return;
+        if (!touch) return;
+        const end = event.changedTouches[0];
+        // A tap on a strip caught mid-slide: let it settle.
+        if (!touch.axis) {
+          if (Math.abs(stripX() - restX()) > 0.5) slide(SETTLE_MS);
+          return;
+        }
         ignoreClicksUntil = performance.now() + 400;
-        if (touch.axis !== 'y' || zoom) return;
+        if (zoom) return;
+        if (touch.axis === 'x') {
+          // The speed at release counts the last 100ms only, so a finger that stopped before lifting doesn't flick.
+          touch.samples.push({ x: end.clientX, t: event.timeStamp });
+          while (touch.samples.length > 2 && event.timeStamp - touch.samples[0].t > 100) touch.samples.shift();
+          return release(touch, end.clientX);
+        }
 
-        const dy = event.changedTouches[0].clientY - touch.y;
+        const dy = end.clientY - touch.y;
         const velocity = dy / (event.timeStamp - touch.time);
         const dismissed = dy > DISMISS_DISTANCE || (dy > DISMISS_MIN_DISTANCE && velocity > DISMISS_VELOCITY);
         if (dismissed) close();
@@ -503,6 +814,7 @@ import IconButton from './IconButton.astro';
       'touchcancel',
       () => {
         if (gesture?.axis === 'y' && !zoom) springBack();
+        if (gesture && gesture.axis !== 'y' && !zoom && Math.abs(stripX() - restX()) > 0.5) slide(SETTLE_MS);
         gesture = undefined;
       },
       { signal },
@@ -513,8 +825,13 @@ import IconButton from './IconButton.astro';
       () => {
         if (state !== 'open') return;
         zoomOut(false);
-        layout();
-        full.sizes = `${Math.ceil(target.width)}px`;
+        pageWidth = dialog!.clientWidth;
+        for (const slot of slots) {
+          if (slot.pos === undefined) continue;
+          slot.el.style.transform = `translateX(${slot.pos * pageWidth}px)`;
+          layoutSlot(slot);
+        }
+        slide(0);
         updateCursor();
       },
       { signal },

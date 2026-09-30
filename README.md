@@ -157,7 +157,7 @@ About, Contact, Imprint, Privacy and Settings exist exactly once and cannot be d
 - **Caption**: optional, shown below the image.
 - Images are shown uncropped in their original aspect ratio, at most 70 % of the screen height.
 - While an image loads, a blurred preview of it is shown.
-- On project pages, clicking an image enlarges it. Arrow buttons, the arrow keys or swiping switch between the project's images. Clicking the enlarged image zooms in on details if the uploaded file is large enough; moving the mouse (or dragging on touch screens) moves around. Close with the × button, Escape, a click next to the image or, on touch screens, by dragging the image down.
+- On project pages, clicking an image enlarges it. Arrow buttons, the arrow keys or swiping slide on to the project's other images; on touch screens the images follow the finger. Clicking the enlarged image zooms in on details if the uploaded file is large enough; moving the mouse (or dragging on touch screens) moves around. Close with the × button, Escape, a click next to the image or, on touch screens, by dragging the image down.
 - Upload images in full resolution. The website loads scaled versions (640–2400 px wide) in modern formats from the Sanity image CDN. SVG files are used as they are.
 
 ### Slideshows in projects
