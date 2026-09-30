@@ -2,9 +2,9 @@
 /** Enlarges every <Figure zoomable /> on the page. Render once per page. */
 import IconButton from './IconButton.astro';
 
-// The images sit on a strip that slides sideways: the current one, its two neighbors, and a spare, so a new
-// slide can start while the last one is still moving without an image vanishing.
-const slots = 4;
+// The images sit on a strip that slides sideways with a swipe: the current one, its two neighbors, and two spares,
+// so turns in quick succession never have to reuse an image that is still sliding or fading out.
+const slots = 5;
 ---
 
 <dialog
@@ -16,7 +16,7 @@ const slots = 4;
   <div class="absolute inset-0" data-lightbox-track>
     {
       Array.from({ length: slots }, () => (
-        <div class="absolute inset-0" data-lightbox-slot>
+        <div class="absolute inset-0 transition-fade motion-reduce:transition-none" data-lightbox-slot>
           <div
             class="absolute origin-top-left bg-placeholder bg-(image:--lqip) bg-cover has-[[data-lightbox-full][data-loaded]]:bg-none"
             data-lightbox-frame
@@ -78,8 +78,8 @@ const slots = 4;
     /** Position on the strip, counted from the image the lightbox opened with; unset while unused. */
     pos?: number;
     target: Rect;
-    /** The running fade and blur, kept in step with the strip's slide. */
-    fades: Animation[];
+    /** Fading out after the buttons or arrow keys turned on, over the current image's place. */
+    fading?: boolean;
   };
 
   // iOS-like curve: fast start for instant feedback, long soft landing.
@@ -92,10 +92,11 @@ const slots = 4;
   const FADE_MS = 200;
   // Zooming in or out, springing back after a drag that didn't close, settling a strip that was let go.
   const SETTLE_MS = 300;
-  // Sliding to the next image with the buttons or arrow keys: moving across the screen, so a gentle ease-in-out
-  // (EASE would jump off at twice its average speed). Swipes keep EASE, which picks up the finger's speed.
-  const SLIDE_EASE = 'cubic-bezier(0.45, 0, 0.2, 1)';
-  const SLIDE_MS = 450;
+  // The buttons and arrow keys don't slide: the new image fades in over the old one like in the slideshow, with its
+  // utility (transition-fade in global.css, 450ms).
+  const CROSSFADE_MS = 450;
+  // Held arrow keys repeat about every 30ms; a few crossfades at once are plenty.
+  const REPEAT_MS = 120;
   // After a swipe, the slide takes as long as keeps the finger's speed, within these bounds.
   const SWIPE_MIN_MS = 240;
   const SWIPE_MAX_MS = 520;
@@ -116,10 +117,6 @@ const slots = 4;
   const DISMISS_VELOCITY = 0.11;
   // Movement that makes a touch a drag rather than a tap.
   const DRAG_THRESHOLD = 8;
-  // An image is fully faded out this far from the middle, in image widths: before it has slid out completely.
-  const FADE_DISTANCE = 0.55;
-  // It blurs as it fades, up to this many px there. Blur on large images is costly, in Safari especially.
-  const MAX_BLUR = 8;
 
   const transition = (duration: number, ...properties: string[]) =>
     properties.map(property => `${property} ${duration}ms ${EASE}`).join(', ');
@@ -158,7 +155,6 @@ const slots = 4;
       full: part<HTMLImageElement>('full', el),
       caption: part('caption', el),
       target: { left: 0, top: 0, width: 0, height: 0 },
-      fades: [],
     }));
     const captions = slots.map(slot => slot.caption);
     const fullTemplate = slots[0].full.cloneNode() as HTMLImageElement;
@@ -174,6 +170,8 @@ const slots = 4;
     let pageWidth = innerWidth;
     let sliding = false;
     let slideTimer: number | undefined;
+    let fadeTimer: number | undefined;
+    let lastCrossfade = 0;
     let morph = true;
     let closeTimer: number | undefined;
     /** Zoomed in: the scale, and where the image's top left corner sits in the viewport. */
@@ -206,23 +204,6 @@ const slots = 4;
     const currentSlot = () => slotAt(view)!;
     /** The strip's resting place for the current image. */
     const restX = () => -view * pageWidth;
-    /** Opacity by signed distance from the middle, in image widths: full in the middle, gone at FADE_DISTANCE. */
-    const fadeAt = (distance: number) => Math.max(0, 1 - Math.abs(distance) / FADE_DISTANCE);
-    /** Blur by the same distance: sharp in the middle, MAX_BLUR from FADE_DISTANCE on. */
-    const blurAt = (distance: number) => Math.min(1, Math.abs(distance) / FADE_DISTANCE) * MAX_BLUR;
-
-    /** Sets a slot's opacity and blur for the strip at `x`: on the slot, and the blur on image and caption only. */
-    function applyFade(slot: Slot, x: number) {
-      const distance = slot.pos! + x / pageWidth;
-      const blur = blurAt(distance);
-      slot.el.style.opacity = String(fadeAt(distance));
-      slot.frame.style.filter = slot.caption.style.filter = blur ? `blur(${blur}px)` : '';
-    }
-
-    function stopFades(slot: Slot) {
-      for (const animation of slot.fades) animation.cancel();
-      slot.fades = [];
-    }
     /** Where the strip is right now, mid-slide included. */
     function stripX() {
       const transform = getComputedStyle(track).transform;
@@ -251,6 +232,9 @@ const slots = 4;
       slot.pos = pos;
       slot.el.hidden = false;
       slot.el.style.transform = `translateX(${pos * pageWidth}px)`;
+      slot.fading = false;
+      slot.el.style.transition = 'none';
+      slot.el.style.opacity = slot.el.style.pointerEvents = '';
       slot.frame.style.transition = 'none';
       slot.frame.style.transform = slot.frame.style.opacity = '';
       slot.caption.style.removeProperty('transition');
@@ -302,22 +286,23 @@ const slots = 4;
       }
     }
 
-    /** Fills the positions around `view` into slots, reusing ones that are neither needed nor on screen at `x`. */
+    /**
+     * Fills the positions around `view` into slots, reusing ones that are neither needed, on screen at `x`, nor still
+     * fading out.
+     */
     function fillSlots(x: number) {
       const needed = items.length > 1 ? [view - 1, view, view + 1] : [view];
-      const onScreen = (pos: number) => Math.abs(pos + x / pageWidth) < 1;
+      const busy = (slot: Slot) => slot.fading || needed.includes(slot.pos!) || Math.abs(slot.pos! + x / pageWidth) < 1;
       for (const pos of needed) {
         if (slotAt(pos)) continue;
         const spare =
           slots.find(slot => slot.pos === undefined) ??
-          slots.find(slot => !needed.includes(slot.pos!) && !onScreen(slot.pos!)) ??
-          // Only when slides start in very quick succession: the one farthest away.
+          slots.find(slot => !busy(slot)) ??
+          // Only when turns come in very quick succession: the one farthest away.
           slots
             .filter(slot => !needed.includes(slot.pos!))
             .sort((a, b) => Math.abs(b.pos! - view) - Math.abs(a.pos! - view))[0];
         setContent(spare, pos);
-        stopFades(spare);
-        applyFade(spare, x);
         layoutSlot(spare);
       }
       // Screen readers get the current image only.
@@ -342,48 +327,12 @@ const slots = 4;
       updateCursor();
     }
 
-    /**
-     * The image sliding out fades and blurs, the one coming in sharpens and gains opacity, while the strip moves from
-     * `fromX` to `toX`. Both bend where they reach their limits, so they get keyframes at exactly those points and the
-     * strip's curve and duration: they stay in step with the movement all the way.
-     */
-    function fadeSlots(fromX: number, toX: number, duration: number, easing = EASE) {
-      for (const slot of slots) {
-        stopFades(slot);
-        if (slot.pos === undefined) continue;
-        applyFade(slot, toX);
-        if (!duration) continue;
-
-        const from = slot.pos + fromX / pageWidth;
-        const to = slot.pos + toX / pageWidth;
-        const offsets = [0, 1];
-        for (const bend of [-FADE_DISTANCE, 0, FADE_DISTANCE]) {
-          const offset = (bend - from) / (to - from);
-          if (offset > 0 && offset < 1) offsets.push(offset);
-        }
-        offsets.sort((a, b) => a - b);
-        const at = (offset: number) => from + (to - from) * offset;
-        const timing = { duration, easing };
-        const blur = offsets.map(offset => ({ offset, filter: `blur(${blurAt(at(offset))}px)` }));
-        slot.fades = [
-          slot.el.animate(
-            offsets.map(offset => ({ offset, opacity: fadeAt(at(offset)) })),
-            timing,
-          ),
-          slot.frame.animate(blur, timing),
-          slot.caption.animate(blur, timing),
-        ];
-      }
-    }
-
     /** Slides the strip to `view`. Transitions retarget, so this also carries on from mid-slide or a drag. */
-    function slide(duration: number, easing = EASE) {
+    function slide(duration: number) {
       clearTimeout(slideTimer);
       sliding = duration > 0;
-      const fromX = stripX();
-      track.style.transition = sliding ? `transform ${duration}ms ${easing}` : 'none';
+      track.style.transition = sliding ? transition(duration, 'transform') : 'none';
       track.style.transform = `translateX(${restX()}px)`;
-      fadeSlots(fromX, restX(), sliding ? duration : 0, easing);
       if (sliding) slideTimer = window.setTimeout(() => (sliding = false), duration);
     }
 
@@ -391,25 +340,69 @@ const slots = 4;
     function moveStrip(x: number) {
       track.style.transition = 'none';
       track.style.transform = `translateX(${x}px)`;
-      fadeSlots(x, x, 0);
     }
 
-    /** Turns to the next or previous image, sliding on from wherever the strip is at `x`. */
-    function turn(step: 1 | -1, x: number, duration: number, easing = EASE) {
+    /** Swipes: turns to the next or previous image, sliding on from wherever the strip is at `x`. */
+    function turn(step: 1 | -1, x: number, duration: number) {
       zoomOut(false);
       view += step;
       fillSlots(x);
       setCurrent({ scroll: true });
-      slide(duration, easing);
+      slide(duration);
     }
 
+    /**
+     * Buttons and arrow keys: the strip jumps to the new image, and the old one stays over its place, fading out while
+     * the new one fades in, like the slideshow. Opacity transitions retarget, so presses in quick succession blend on.
+     */
     function go(step: 1 | -1) {
       if (state !== 'open' || items.length < 2) return;
-      const x = stripX();
-      // A held arrow key repeats faster than the strip slides: wait until it is within an image of its target,
-      // so the images it still has to pass are never recycled.
-      if (Math.abs(x - restX()) >= pageWidth) return;
-      turn(step, x, morph ? SLIDE_MS : 0, SLIDE_EASE);
+      const now = performance.now();
+      if (now - lastCrossfade < REPEAT_MS) return;
+      lastCrossfade = now;
+
+      zoomOut(false);
+      const previous = currentSlot();
+      view += step;
+      fillSlots(restX());
+      setCurrent({ scroll: true });
+      slide(0);
+
+      const incoming = currentSlot();
+      previous.fading = true;
+      // A slot that was fading out already carries on from its opacity; any other starts from transparent.
+      if (!incoming.fading) {
+        incoming.el.style.transition = 'none';
+        incoming.el.style.opacity = '0';
+        incoming.el.getBoundingClientRect(); // Commit, so the fade-in runs.
+      }
+      incoming.fading = false;
+      incoming.el.style.transform = `translateX(${view * pageWidth}px)`;
+      incoming.el.style.pointerEvents = '';
+      incoming.el.style.removeProperty('transition');
+      incoming.el.style.opacity = '1';
+      for (const slot of slots) {
+        if (!slot.fading) continue;
+        // Over the new image's place, and out of the way of clicks on it.
+        slot.el.style.transform = `translateX(${view * pageWidth}px)`;
+        slot.el.style.pointerEvents = 'none';
+        slot.el.style.removeProperty('transition');
+        slot.el.style.opacity = '0';
+      }
+      clearTimeout(fadeTimer);
+      fadeTimer = window.setTimeout(settleFades, CROSSFADE_MS);
+    }
+
+    /** Ends crossfades at once: faded slots back to their places on the strip, the current image fully shown. */
+    function settleFades() {
+      clearTimeout(fadeTimer);
+      for (const slot of slots) {
+        if (slot.pos === undefined || (!slot.fading && slot.pos !== view)) continue;
+        slot.fading = false;
+        slot.el.style.transition = 'none';
+        slot.el.style.opacity = slot.el.style.pointerEvents = '';
+        slot.el.style.transform = `translateX(${slot.pos * pageWidth}px)`;
+      }
     }
 
     /** How far the current image can grow before it turns soft: to its original width, at most the largest file. */
@@ -511,7 +504,6 @@ const slots = 4;
       slide(0);
       layoutSlot(slot);
       fillSlots(0);
-      fadeSlots(0, 0, 0);
       setCurrent({ scroll: false });
 
       // Start exactly on top of the thumbnail, then grow into place.
@@ -536,6 +528,7 @@ const slots = 4;
 
     function close() {
       if (state !== 'open') return;
+      settleFades();
       state = 'closing';
       zoom = undefined;
       const { frame, target } = currentSlot();
@@ -565,6 +558,7 @@ const slots = 4;
     function finish() {
       clearTimeout(closeTimer);
       clearTimeout(slideTimer);
+      clearTimeout(fadeTimer);
       if (state === 'closed') return;
       const wasShown = state !== 'opening';
       state = 'closed';
@@ -579,8 +573,9 @@ const slots = 4;
       for (const el of [backdrop, ui, track]) el.style.removeProperty('transition');
       backdrop.style.opacity = ui.style.opacity = track.style.transform = '';
       for (const slot of slots) {
-        stopFades(slot);
-        slot.el.style.opacity = slot.frame.style.filter = slot.caption.style.filter = '';
+        slot.fading = false;
+        slot.el.style.removeProperty('transition');
+        slot.el.style.opacity = slot.el.style.pointerEvents = '';
         slot.frame.style.removeProperty('transition');
         slot.frame.style.transform = slot.frame.style.opacity = '';
         slot.caption.style.removeProperty('transition');
@@ -696,6 +691,8 @@ const slots = 4;
           gesture = undefined;
           return;
         }
+        // A touch on the image ends a crossfade, so a swipe starts from the strip in place.
+        if (state === 'open') settleFades();
         const touch = event.touches.length === 1 ? event.touches[0] : undefined;
         // A second finger means pinch-zoom, which the browser handles.
         if (!touch || state !== 'open' || (visualViewport?.scale ?? 1) > 1) {
@@ -824,6 +821,7 @@ const slots = 4;
       'resize',
       () => {
         if (state !== 'open') return;
+        settleFades();
         zoomOut(false);
         pageWidth = dialog!.clientWidth;
         for (const slot of slots) {
