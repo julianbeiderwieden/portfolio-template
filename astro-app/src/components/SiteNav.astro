@@ -43,6 +43,12 @@ const navLinkClass = (state: LinkState) =>
     highlighted: `${linkBase} text-foreground group-has-[a:hover]/nav:not-hover:text-muted`,
     inactive: `${linkBase} text-muted`,
   })[state];
+
+/** Project titles belong to "Projects": hovering it leaves them black, only other links gray them. */
+const projectLinkClass = (state: LinkState) =>
+  state === 'highlighted'
+    ? `${linkBase} text-foreground group-has-[a:not([href='/projects']):hover]/nav:not-hover:text-muted`
+    : navLinkClass(state);
 ---
 
 <header
@@ -67,9 +73,9 @@ const navLinkClass = (state: LinkState) =>
                 class="pl-6"
                 aria-label="Projects"
                 hidden={!projectsActive}
-                data-current={navLinkClass('current')}
-                data-highlighted={navLinkClass('highlighted')}
-                data-inactive={navLinkClass('inactive')}
+                data-current={projectLinkClass('current')}
+                data-highlighted={projectLinkClass('highlighted')}
+                data-inactive={projectLinkClass('inactive')}
               >
                 {projects.map(project => {
                   const href = `/projects/${project.slug}`;
@@ -78,7 +84,7 @@ const navLinkClass = (state: LinkState) =>
                     <li>
                       <a
                         href={href}
-                        class={navLinkClass(active ? 'current' : projectsIndex ? 'highlighted' : 'inactive')}
+                        class={projectLinkClass(active ? 'current' : projectsIndex ? 'highlighted' : 'inactive')}
                         aria-current={active ? 'page' : undefined}
                         data-preview-slug={project.coverImage?.asset && !active ? project.slug : undefined}
                       >
