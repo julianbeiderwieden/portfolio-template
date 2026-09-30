@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.astro/
+
+# Sanity Studio
+studio/.sanity/
+
+# Package manager
+package-lock.json
+pnpm-lock.yaml
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Assets
+*.woff
+*.woff2
+
+# Misc
+.DS_Store
+.netlify/

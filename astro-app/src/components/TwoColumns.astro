@@ -1,0 +1,39 @@
+---
+import Figure from './Figure.astro';
+import PortableText from './PortableText.astro';
+import type { ColumnItem, SanityImage } from '../utils/sanity';
+import { columnRichText } from '../utils/ui';
+
+interface Props {
+  left: ColumnItem[];
+  right: ColumnItem[];
+  /** The page's first image: loaded eagerly if it is in here, and morphed into from the cover. */
+  firstImage?: SanityImage;
+  firstImageTransitionName?: string;
+}
+
+const { left, right, firstImage, firstImageTransitionName } = Astro.props;
+---
+
+{/* Always 50/50, even with one column empty; stacked on narrow phones, where an empty one is dropped. */}
+<div class="grid gap-x-5 gap-y-8 sm:grid-cols-2">
+  {
+    [left, right].map(items => (
+      <div class:list={['min-w-0 space-y-5', items.length === 0 && 'max-sm:hidden']}>
+        {items.map(item =>
+          item._type === 'textSection' ? (
+            <PortableText value={item.text ?? []} class={columnRichText} />
+          ) : (
+            <Figure
+              image={item}
+              sizes="(min-width: 768px) 25vw, (min-width: 640px) 50vw, 100vw"
+              eager={item === firstImage}
+              viewTransitionName={item === firstImage ? firstImageTransitionName : undefined}
+              zoomable
+            />
+          ),
+        )}
+      </div>
+    ))
+  }
+</div>

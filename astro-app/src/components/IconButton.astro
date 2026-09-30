@@ -1,0 +1,47 @@
+---
+import type { HTMLAttributes } from 'astro/types';
+
+/** Round gray control with an arrow or close icon, shared by the lightbox and the cover slideshow. */
+interface Props extends HTMLAttributes<'button'> {
+  icon: 'close' | 'previous' | 'next';
+  label: string;
+  size?: 'sm' | 'md';
+}
+
+const { icon, label, size = 'md', class: className, ...attrs } = Astro.props;
+
+// The arrows are nudged to offset their mitered tip, so all icons share one optical box.
+const paths: Record<Props['icon'], string> = {
+  close: 'M5 5l14 14M19 5 5 19',
+  previous: 'M19.7 12h-14M11.7 6l-6 6 6 6',
+  next: 'M4.3 12h14M12.3 6l6 6-6 6',
+};
+
+const sizes = {
+  md: { button: 'size-10', icon: 'size-5', stroke: 2 },
+  // A heavier stroke keeps the small icon's weight; the pseudo-element grows the hit area to 40px.
+  sm: { button: 'relative size-6 before:absolute before:-inset-2', icon: 'size-3.5', stroke: 2.5 },
+}[size];
+---
+
+<button
+  type="button"
+  class:list={[
+    'grid cursor-pointer place-items-center rounded-full bg-divider text-foreground transition-[background-color,color,scale] duration-150 ease-out hover:bg-foreground hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground active:scale-95',
+    sizes.button,
+    className,
+  ]}
+  aria-label={label}
+  {...attrs}
+>
+  <svg
+    class={sizes.icon}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width={sizes.stroke}
+    aria-hidden="true"
+  >
+    <path d={paths[icon]}></path>
+  </svg>
+</button>

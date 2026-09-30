@@ -1,0 +1,225 @@
+---
+import Figure from './Figure.astro';
+import IconButton from './IconButton.astro';
+import type { SanityImage } from '../utils/sanity';
+
+interface Slide {
+  image: SanityImage;
+  /** Makes the whole slide a link, labelled with `label`. */
+  href?: string;
+  label?: string;
+  /** Morphs the slide's image into the same-named image on the next page, while it is the visible slide. */
+  viewTransitionName?: string;
+}
+
+interface Props {
+  slides: Slide[];
+  label: string;
+  /**
+   * corner: pinned to the viewport's bottom right corner, for a slideshow that is the page.
+   * inline: in one row with the captions below the slides.
+   */
+  controls?: 'corner' | 'inline';
+  eager?: boolean;
+  /** Slides without a link open in the page's <Lightbox />. */
+  zoomable?: boolean;
+}
+
+const { slides, label, controls = 'inline', eager = false, zoomable = false } = Astro.props;
+const inline = controls === 'inline';
+const captions = inline && slides.some(slide => slide.image.caption);
+---
+
+{/* On phones the page can scroll under the corner controls: keep its end clear of them (16px + 24px buttons). */}
+<div
+  class:list={[controls === 'corner' && 'max-md:pb-[calc(2rem+env(safe-area-inset-bottom))]']}
+  data-slideshow
+  aria-roledescription="carousel"
+  aria-label={label}
+>
+  {/* Inline, the slides sit on the bottom edge, so every image is right above the caption row. */}
+  <div class:list={['grid', inline && 'items-end']}>
+    {
+      slides.map((slide, index) => {
+        const Tag = slide.href ? 'a' : 'div';
+        return (
+          <Tag
+            href={slide.href}
+            class="col-start-1 row-start-1 opacity-0 transition-fade motion-reduce:transition-none data-active:opacity-100"
+            data-slide
+            data-active={index === 0 ? '' : undefined}
+            inert={index !== 0}
+            role={slide.href ? undefined : 'group'}
+            aria-roledescription={slide.href ? undefined : 'slide'}
+            aria-label={slide.href ? slide.label : `${index + 1} of ${slides.length}`}
+          >
+            <Figure
+              image={slide.image}
+              eager={eager && index === 0}
+              zoomable={zoomable && !slide.href}
+              hideCaption={inline}
+              viewTransitionName={slide.viewTransitionName}
+            />
+          </Tag>
+        );
+      })
+    }
+  </div>
+  {
+    (slides.length > 1 || captions) && (
+      // In the corner on desktop, its center lines up with the legal links at the bottom of the nav
+      // (20px padding + half their 12px line).
+      <div
+        class:list={[
+          'flex items-start gap-4',
+          inline
+            ? 'mt-2'
+            : 'fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] md:right-5 md:bottom-[calc(0.875rem+env(safe-area-inset-bottom))]',
+        ]}
+      >
+        {captions && (
+          // Stacked like the slides, so the row keeps the height of the longest caption. Screen readers
+          // get each caption from its figure instead. The 2px centers the first line on the buttons.
+          <div class="grid min-w-0 flex-1 pt-0.5 text-meta text-muted" aria-hidden="true">
+            {slides.map((slide, index) => (
+              <p
+                class="col-start-1 row-start-1 opacity-0 transition-fade motion-reduce:transition-none data-active:opacity-100"
+                data-slide-caption
+                data-active={index === 0 ? '' : undefined}
+              >
+                {slide.image.caption}
+              </p>
+            ))}
+          </div>
+        )}
+        {slides.length > 1 && (
+          // 8px apart: exactly where the 40px hit areas meet, so neither reaches the other's circle.
+          <div class="ml-auto flex shrink-0 gap-2">
+            <IconButton icon="previous" label="Previous slide" size="sm" data-slideshow-prev />
+            <IconButton icon="next" label="Next slide" size="sm" data-slideshow-next />
+          </div>
+        )}
+      </div>
+    )
+  }
+</div>
+
+<script>
+  import { onHorizontalSwipe } from '../utils/swipe';
+
+  const INTERVAL = 4000;
+
+  type PauseReason = 'hover' | 'focus' | 'hidden' | 'offscreen' | 'lightbox';
+
+  /** Running slideshows and how to stop them. */
+  const instances = new Map<HTMLElement, () => void>();
+
+  function create(root: HTMLElement) {
+    const slides = [...root.querySelectorAll<HTMLElement>('[data-slide]')];
+    const captions = [...root.querySelectorAll<HTMLElement>('[data-slide-caption]')];
+    const autoplay = slides.length > 1 && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const pauses = new Set<PauseReason>();
+    const controller = new AbortController();
+    const { signal } = controller;
+    let current = Math.max(
+      0,
+      slides.findIndex(slide => slide.hasAttribute('data-active')),
+    );
+    let timer: number | undefined;
+
+    /** Gives the current slide the full interval, unless paused. */
+    function restart() {
+      clearTimeout(timer);
+      if (autoplay && !pauses.size) timer = window.setTimeout(() => show(current + 1), INTERVAL);
+    }
+
+    function setActive(index: number, active: boolean) {
+      slides[index].toggleAttribute('data-active', active);
+      slides[index].inert = !active;
+      captions[index]?.toggleAttribute('data-active', active);
+    }
+
+    function show(index: number) {
+      const next = (index + slides.length) % slides.length;
+      setActive(current, false);
+      setActive(next, true);
+      current = next;
+      restart();
+    }
+
+    function pause(reason: PauseReason, paused: boolean) {
+      const wasPaused = pauses.size > 0;
+      if (paused) pauses.add(reason);
+      else pauses.delete(reason);
+      if (wasPaused !== pauses.size > 0) restart();
+    }
+
+    root.querySelector('[data-slideshow-prev]')?.addEventListener('click', () => show(current - 1), { signal });
+    root.querySelector('[data-slideshow-next]')?.addEventListener('click', () => show(current + 1), { signal });
+
+    // Hold still under the mouse or keyboard focus, so the slide can't change right before a click.
+    root.addEventListener(
+      'pointerenter',
+      event => {
+        if (event.pointerType === 'mouse') pause('hover', true);
+      },
+      { signal },
+    );
+    root.addEventListener(
+      'pointerleave',
+      event => {
+        if (event.pointerType === 'mouse') pause('hover', false);
+      },
+      { signal },
+    );
+    // Only keyboard focus: a clicked button keeps focus, which must not pause it for good.
+    root.addEventListener('focusin', event => pause('focus', (event.target as Element).matches(':focus-visible')), {
+      signal,
+    });
+    root.addEventListener(
+      'focusout',
+      event => {
+        if (!root.contains(event.relatedTarget as Node | null)) pause('focus', false);
+      },
+      { signal },
+    );
+    document.addEventListener('visibilitychange', () => pause('hidden', document.hidden), { signal });
+    onHorizontalSwipe(root, step => show(current + step), { signal });
+
+    // Out of view it waits, so it's not somewhere random by the time it's scrolled to.
+    const observer = new IntersectionObserver(([entry]) => pause('offscreen', !entry.isIntersecting));
+    observer.observe(root);
+
+    // While the lightbox shows one of its images: follow along and hold still, so closing lands on that slide.
+    document.addEventListener(
+      'lightbox:change',
+      event => {
+        const { trigger } = event.detail;
+        const index = trigger ? slides.findIndex(slide => slide.contains(trigger)) : -1;
+        pause('lightbox', index >= 0);
+        if (index >= 0 && index !== current) show(index);
+      },
+      { signal },
+    );
+
+    pause('hidden', document.hidden);
+    restart();
+
+    return () => {
+      controller.abort();
+      observer.disconnect();
+      clearTimeout(timer);
+    };
+  }
+
+  document.addEventListener('astro:page-load', () => {
+    const roots = new Set(document.querySelectorAll<HTMLElement>('[data-slideshow]'));
+    for (const [root, destroy] of instances) {
+      if (roots.has(root)) continue;
+      destroy();
+      instances.delete(root);
+    }
+    // A root that is already running was persisted across the navigation: keep playing where it is.
+    for (const root of roots) if (!instances.has(root)) instances.set(root, create(root));
+  });
+</script>

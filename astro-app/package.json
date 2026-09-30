@@ -1,0 +1,32 @@
+{
+  "name": "astro-app",
+  "type": "module",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev --port 4321",
+    "start": "astro dev --port 4321",
+    "build": "astro check && tsc --noEmit && astro build",
+    "preview": "astro preview --port 4321",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@astrojs/netlify": "^8.1.2",
+    "@sanity/astro": "^3.5.1",
+    "@tailwindcss/vite": "^4.2.4",
+    "astro": "^7.3.5",
+    "astro-portabletext": "^0.13.0",
+    "groq": "^6.5.0",
+    "sanity": "^6.5.0",
+    "sharp": "^0.35.4",
+    "tailwindcss": "^4.2.4"
+  },
+  "devDependencies": {
+    "@portabletext/types": "^2.0.13",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3"
+  }
+}

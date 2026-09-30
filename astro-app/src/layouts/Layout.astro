@@ -1,0 +1,231 @@
+---
+import '../styles/global.css';
+import { ClientRouter } from 'astro:transitions';
+import SiteNav from '../components/SiteNav.astro';
+import Figure from '../components/Figure.astro';
+import { getSettings, getProjectList, imageUrl, type ImageAsset } from '../utils/sanity';
+import { faviconPath } from '../utils/favicon';
+import { absoluteUrl } from '../utils/seo';
+import { currentPath, isProjectsPath } from '../utils/nav';
+import { themeColor } from '../utils/theme';
+
+interface Props {
+  title?: string;
+  description?: string;
+  image?: ImageAsset;
+  imageAlt?: string;
+  type?: 'website' | 'article';
+  noindex?: boolean;
+}
+
+const { title, description, image, imageAlt, type = 'website', noindex = false } = Astro.props;
+const [settings, projects] = await Promise.all([getSettings(), getProjectList()]);
+
+// Hover previews exist only where the navigation lists the projects, minus the page's own project.
+const path = currentPath(Astro.url);
+const previews = isProjectsPath(path)
+  ? projects.flatMap(({ slug, coverImage }) =>
+      coverImage?.asset && path !== `/projects/${slug}` ? [{ slug, coverImage }] : [],
+    )
+  : [];
+const fav = settings?.favicon;
+const siteTitle = settings?.title ?? 'Portfolio';
+const language = settings?.language ?? 'en';
+const ogRegion = (() => {
+  try {
+    return new Intl.Locale(language).maximize().region;
+  } catch {
+    return undefined;
+  }
+})();
+// og:locale needs language_TERRITORY; constructed languages like Esperanto have none.
+const ogLocale = ogRegion && /^[A-Z]{2}$/.test(ogRegion) ? `${language}_${ogRegion}` : undefined;
+const defaultTitle = settings?.seoTitle ?? siteTitle;
+const pageTitle = title ? `${title} – ${siteTitle}` : defaultTitle;
+const metaDescription = description ?? settings?.metaDescription;
+const canonicalUrl = absoluteUrl(settings?.siteUrl, Astro.url.pathname);
+const socialTitle = title ? pageTitle : (settings?.openGraphTitle ?? pageTitle);
+const socialDescription = description ?? settings?.openGraphDescription ?? metaDescription;
+const socialAsset = image ?? settings?.socialImage;
+const socialImageUrl = socialAsset
+  ? imageUrl(socialAsset, 1200, 630)
+  : fav
+    ? absoluteUrl(settings?.siteUrl, faviconPath(512))
+    : undefined;
+const socialImageAlt = (image ? imageAlt : settings?.socialImageAlt) ?? socialTitle;
+const websiteJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: siteTitle,
+  url: absoluteUrl(settings?.siteUrl),
+  description: settings?.metaDescription,
+  inLanguage: language,
+};
+---
+
+<!doctype html>
+<html lang={language} class="md:overscroll-none">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="application-name" content={siteTitle} />
+    <meta name="apple-mobile-web-app-title" content={siteTitle} />
+    <meta name="theme-color" content={themeColor} />
+    <link rel="preload" href="/fonts/OverusedGrotesk-VF.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preconnect" href="https://cdn.sanity.io" />
+    <title>{pageTitle}</title>
+
+    {metaDescription && <meta name="description" content={metaDescription} />}
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    {canonicalUrl && <link rel="canonical" href={canonicalUrl} />}
+
+    <meta property="og:type" content={type} />
+    <meta property="og:site_name" content={siteTitle} />
+    <meta property="og:title" content={socialTitle} />
+    {canonicalUrl && <meta property="og:url" content={canonicalUrl} />}
+    {socialDescription && <meta property="og:description" content={socialDescription} />}
+    {socialImageUrl && <meta property="og:image" content={socialImageUrl} />}
+    {socialImageUrl && <meta property="og:image:alt" content={socialImageAlt} />}
+    {socialImageUrl && <meta property="og:image:width" content="1200" />}
+    {socialImageUrl && <meta property="og:image:height" content="630" />}
+    {ogLocale && <meta property="og:locale" content={ogLocale} />}
+
+    <meta name="twitter:card" content={socialImageUrl ? 'summary_large_image' : 'summary'} />
+    <meta name="twitter:title" content={socialTitle} />
+    {socialDescription && <meta name="twitter:description" content={socialDescription} />}
+    {socialImageUrl && <meta name="twitter:image" content={socialImageUrl} />}
+    {socialImageUrl && <meta name="twitter:image:alt" content={socialImageAlt} />}
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    <script type="application/ld+json" set:html={JSON.stringify(websiteJsonLd)} is:inline />
+
+    {
+      fav && (
+        <>
+          {/* ICO – legacy fallback (16/32/48 px embedded) */}
+          <link rel="shortcut icon" href="/favicon.ico" />
+
+          {/* SVG – modern universal format */}
+          {fav.mimeType === 'image/svg+xml' && <link rel="icon" type="image/svg+xml" href={fav.url} />}
+
+          {/* PNG variants for older browsers and specific contexts */}
+          <link rel="icon" type="image/png" sizes="16x16" href={faviconPath(16)} />
+          <link rel="icon" type="image/png" sizes="32x32" href={faviconPath(32)} />
+          <link rel="icon" type="image/png" sizes="48x48" href={faviconPath(48)} />
+
+          {/* Apple touch icon (iOS/macOS home screen) */}
+          <link rel="apple-touch-icon" sizes="180x180" href={faviconPath(180)} />
+        </>
+      )
+    }
+    {/* Images fade in via script once loaded (ResponsiveImage fadeIn); without scripts, show them at once. */}
+    <noscript
+      ><style is:inline>
+        [data-fade] {
+          opacity: 1 !important;
+        }
+      </style></noscript
+    >
+    <slot name="head" />
+    <ClientRouter />
+  </head>
+  <body
+    class="bg-background font-sans font-bold text-foreground antialiased selection:bg-foreground selection:text-background"
+  >
+    <a
+      href="#content"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:bg-foreground focus:px-3 focus:py-2 focus:text-background"
+    >
+      Skip to content
+    </a>
+    <div class="min-h-dvh md:grid md:grid-cols-2">
+      <SiteNav siteTitle={siteTitle} projects={projects} navFooterText={settings?.navFooterText} />
+      <main
+        id="content"
+        class="group grid min-w-0 border-t border-divider px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:border-t-0 md:border-l md:px-5 md:pt-5 md:pb-5"
+      >
+        {/* Enter 200ms, exit 150ms: the transition of the state being entered applies. */}
+        <div
+          class="col-start-1 row-start-1 min-w-0 transition-opacity duration-150 ease-out group-data-previewing:opacity-0 group-data-previewing:duration-200 motion-reduce:transition-none"
+        >
+          <slot />
+        </div>
+        {
+          previews.length > 0 && (
+            // Hidden until the pointer first comes to the navigation, so the cover images load only then.
+            <div
+              class="pointer-events-none col-start-1 row-start-1 min-w-0"
+              aria-hidden="true"
+              hidden
+              data-hover-previews
+            >
+              <div class="grid md:sticky md:top-5">
+                {previews.map(({ slug, coverImage }) => (
+                  <div
+                    class="col-start-1 row-start-1 opacity-0 transition-opacity duration-150 ease-out data-active:opacity-100 data-active:duration-200 motion-reduce:transition-none"
+                    data-hover-preview={slug}
+                  >
+                    <Figure image={coverImage} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        }
+      </main>
+    </div>
+  </body>
+</html>
+
+<script>
+  function setupHoverPreview() {
+    const main = document.getElementById('content');
+    const layer = document.querySelector<HTMLElement>('[data-hover-previews]');
+    const previews = new Map(
+      [...document.querySelectorAll<HTMLElement>('[data-hover-preview]')].map(el => [el.dataset.hoverPreview, el]),
+    );
+    if (!main || !layer || previews.size === 0 || !matchMedia('(hover: hover)').matches) return;
+
+    const reveal = () => {
+      if (!layer.hidden) return;
+      layer.hidden = false;
+      layer.getBoundingClientRect(); // Commit the hidden state, so a preview shown right away still fades in.
+    };
+    document.querySelector('header')?.addEventListener('pointerenter', reveal, { once: true });
+
+    let active: HTMLElement | undefined;
+    let leaveTimer: number | undefined;
+    const show = (next?: HTMLElement) => {
+      if (next === active) return;
+      reveal();
+      // Like tooltips: only the first preview fades in, moving on to the next title swaps instantly.
+      const instant = Boolean(active && next);
+      for (const el of [active, next]) if (el) el.style.transitionDuration = instant ? '0ms' : '';
+      active?.removeAttribute('data-active');
+      active = next;
+      active?.setAttribute('data-active', '');
+      main.toggleAttribute('data-previewing', Boolean(active));
+    };
+
+    for (const link of document.querySelectorAll<HTMLElement>('[data-preview-slug]')) {
+      const preview = previews.get(link.dataset.previewSlug);
+      link.addEventListener('mouseenter', () => {
+        clearTimeout(leaveTimer);
+        show(preview);
+      });
+      // A moment's grace, so crossing the gap between two titles doesn't fade back to the page.
+      link.addEventListener('mouseleave', () => (leaveTimer = window.setTimeout(() => show(), 100)));
+    }
+  }
+
+  document.addEventListener('astro:page-load', setupHoverPreview);
+
+  // Safety net for the inline load handler of fading images: mark any it missed.
+  document.addEventListener('astro:page-load', () => {
+    for (const img of document.querySelectorAll<HTMLImageElement>('img[data-fade]:not([data-loaded])')) {
+      if (img.complete && img.naturalWidth) img.toggleAttribute('data-loaded', true);
+      else img.addEventListener('load', () => img.toggleAttribute('data-loaded', true), { once: true });
+    }
+  });
+</script>

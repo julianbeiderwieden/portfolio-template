@@ -1,0 +1,143 @@
+---
+import type { GetStaticPaths } from 'astro';
+import Layout from '../../layouts/Layout.astro';
+import PortableText from '../../components/PortableText.astro';
+import Figure from '../../components/Figure.astro';
+import Lightbox from '../../components/Lightbox.astro';
+import Slideshow from '../../components/Slideshow.astro';
+import TwoColumns from '../../components/TwoColumns.astro';
+import NextProject from '../../components/NextProject.astro';
+import Video from '../../components/Video.astro';
+import {
+  getProjects,
+  type ColumnItem,
+  type ImageSection,
+  type Project,
+  type ProjectListItem,
+  type ProjectSection,
+  type SanityImage,
+} from '../../utils/sanity';
+import { contentText, richText } from '../../utils/ui';
+
+export const getStaticPaths = (async () => {
+  const projects = await getProjects();
+  return projects.map((project, index) => ({
+    params: { slug: project.slug },
+    // The one after it in the project order, wrapping around to the first.
+    props: { project, next: projects.length > 1 ? projects[(index + 1) % projects.length] : undefined },
+  }));
+}) satisfies GetStaticPaths;
+
+interface Props {
+  project: Project;
+  next?: ProjectListItem;
+}
+
+const { project, next } = Astro.props;
+const metadata = project.metadata ?? [];
+const hasContent = (item: ColumnItem) =>
+  item._type === 'textSection' ? Boolean(item.text?.length) : Boolean(item.asset);
+const isImage = (item: ColumnItem): item is ImageSection => item._type === 'figure';
+
+const sections = (project.content ?? []).flatMap((section): ProjectSection[] => {
+  if (section._type === 'slideshow') return section.images?.length ? [section] : [];
+  if (section._type === 'video') return section.asset?.url ? [section] : [];
+  if (section._type === 'twoColumns') {
+    const left = (section.left ?? []).filter(hasContent);
+    const right = (section.right ?? []).filter(hasContent);
+    return left.length || right.length ? [{ ...section, left, right }] : [];
+  }
+  return hasContent(section) ? [section] : [];
+});
+// A cover whose image was removed can keep its alt text: check the asset, not just the field.
+const cover = project.coverImage?.asset ? project.coverImage : undefined;
+if (!sections.length && cover) {
+  sections.push({ ...cover, _type: 'figure', _key: 'cover' });
+}
+const images = sections.flatMap(section => {
+  if (section._type === 'figure') return [section];
+  if (section._type === 'slideshow') return section.images ?? [];
+  if (section._type === 'twoColumns') return [...(section.left ?? []), ...(section.right ?? [])].filter(isImage);
+  return [];
+});
+const firstImage = images[0];
+const shareImage = cover ?? firstImage;
+// When the page starts with the cover image, the cover in the slideshow grows into it (View Transitions).
+const coverTransitionName =
+  firstImage && firstImage.asset.url === cover?.asset.url ? `cover-${project.slug}` : undefined;
+const transitionName = (image: SanityImage) => (image === firstImage ? coverTransitionName : undefined);
+---
+
+<Layout
+  title={project.seoTitle ?? project.title}
+  description={project.seoDescription ?? project.excerpt}
+  image={shareImage?.asset}
+  imageAlt={shareImage?.alt}
+  type="article"
+>
+  <article>
+    <header>
+      <h1 class={contentText}>{project.title}</h1>
+      {
+        metadata.length > 0 && (
+          <dl class="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs md:mt-5">
+            {metadata.map(item => (
+              <div>
+                <dt class="text-muted">{item.title}</dt>
+                <dd>{item.content}</dd>
+              </div>
+            ))}
+          </dl>
+        )
+      }
+    </header>
+
+    {
+      sections.length > 0 && (
+        <div class="mt-8 space-y-8 md:mt-10 md:space-y-10">
+          {sections.map(section => {
+            if (section._type === 'textSection') return <PortableText value={section.text ?? []} class={richText} />;
+            if (section._type === 'figure')
+              return (
+                <Figure
+                  image={section}
+                  eager={section === firstImage}
+                  viewTransitionName={transitionName(section)}
+                  zoomable
+                />
+              );
+            if (section._type === 'video')
+              return section.asset && <Video video={{ ...section, asset: section.asset }} />;
+            if (section._type === 'twoColumns')
+              return (
+                <TwoColumns
+                  left={section.left ?? []}
+                  right={section.right ?? []}
+                  firstImage={firstImage}
+                  firstImageTransitionName={coverTransitionName}
+                />
+              );
+            const slides = section.images ?? [];
+            return slides.length > 1 ? (
+              <Slideshow
+                slides={slides.map(image => ({ image, viewTransitionName: transitionName(image) }))}
+                label="Slideshow"
+                eager={slides[0] === firstImage}
+                zoomable
+              />
+            ) : (
+              <Figure
+                image={slides[0]}
+                eager={slides[0] === firstImage}
+                viewTransitionName={transitionName(slides[0])}
+                zoomable
+              />
+            );
+          })}
+        </div>
+      )
+    }
+    {next && <NextProject project={next} />}
+  </article>
+  {images.length > 0 && <Lightbox />}
+</Layout>

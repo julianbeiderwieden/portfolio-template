@@ -1,0 +1,66 @@
+---
+import { imageUrl, type VideoSection } from '../utils/sanity';
+
+interface Props {
+  video: VideoSection & { asset: NonNullable<VideoSection['asset']> };
+}
+
+const { video } = Astro.props;
+const { asset, poster, title, caption } = video;
+const loop = video.loop !== false;
+// The poster's size reserves the video's space before it loads, sized like images.
+const width = poster?.width;
+const height = poster?.height;
+const posterUrl = poster ? imageUrl(poster, { width: 1600, fit: 'max' }) : undefined;
+---
+
+<figure style={width && height ? `--aspect: ${width / height}` : undefined}>
+  <video
+    class="block h-auto max-h-[70vh] w-full max-w-[calc(70vh*var(--aspect))] bg-placeholder"
+    src={asset.url}
+    poster={posterUrl}
+    width={width}
+    height={height}
+    preload="metadata"
+    playsinline
+    muted={loop}
+    loop={loop}
+    controls={!loop}
+    aria-label={title}
+    data-autoplay={loop ? '' : undefined}
+  >
+  </video>
+  {caption && <figcaption class="mt-2 text-meta text-muted">{caption}</figcaption>}
+</figure>
+
+<script>
+  let observer: IntersectionObserver | undefined;
+
+  // Moving images play only while on screen. With reduced motion they don't start on their own but get controls.
+  document.addEventListener('astro:page-load', () => {
+    observer?.disconnect();
+    const videos = [...document.querySelectorAll<HTMLVideoElement>('video[data-autoplay]')];
+    if (!videos.length) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      for (const video of videos) video.controls = true;
+      return;
+    }
+
+    observer = new IntersectionObserver(entries => {
+      for (const { target, isIntersecting } of entries) {
+        const video = target as HTMLVideoElement;
+        if (!isIntersecting) {
+          video.pause();
+          continue;
+        }
+        video.muted = true;
+        // Autoplay can still be refused (e.g. in low power mode): then let people start it themselves. A play()
+        // cut short by pause() when scrolling past quickly rejects too, but with an AbortError.
+        video.play().catch((error: DOMException) => {
+          if (error.name === 'NotAllowedError') video.controls = true;
+        });
+      }
+    });
+    for (const video of videos) observer.observe(video);
+  });
+</script>

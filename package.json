@@ -1,0 +1,23 @@
+{
+  "name": "portfolio-template",
+  "description": "Portfolio-Website-Template (Astro + Sanity)",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=astro-app\" \"npm run dev --workspace=studio\"",
+    "dev:web": "npm run dev --workspace=astro-app",
+    "dev:studio": "npm run dev --workspace=studio",
+    "build": "npm run build --workspace=astro-app",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "workspaces": [
+    "studio",
+    "astro-app"
+  ],
+  "devDependencies": {
+    "concurrently": "^10.0.3",
+    "prettier": "^3.8.3",
+    "prettier-plugin-astro": "^0.14.1"
+  },
+  "type": "module"
+}

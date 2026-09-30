@@ -1,0 +1,39 @@
+{
+  "name": "studio",
+  "private": true,
+  "version": "1.0.0",
+  "main": "package.json",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "sanity dev --port 3333",
+    "start": "sanity start",
+    "build": "sanity build",
+    "deploy": "sanity deploy",
+    "seed": "sanity dataset import ./seed/content.ndjson --replace"
+  },
+  "keywords": [
+    "sanity"
+  ],
+  "dependencies": {
+    "@sanity/icons": "^5.2.2",
+    "@sanity/ui": "^4.2.6",
+    "@sanity/vision": "^6.17.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "sanity": "^6.17.0",
+    "styled-components": "^6.4.1"
+  },
+  "devDependencies": {
+    "@sanity/eslint-config-studio": "^6.0.0",
+    "@types/react": "^19.2.14",
+    "eslint": "^9.39.4",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3"
+  },
+  "prettier": {
+    "semi": false,
+    "printWidth": 100,
+    "bracketSpacing": false,
+    "singleQuote": true
+  }
+}

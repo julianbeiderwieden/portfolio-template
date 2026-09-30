@@ -1,0 +1,29 @@
+---
+import Slideshow from './Slideshow.astro';
+import type { ProjectListItem } from '../utils/sanity';
+import { contentText } from '../utils/ui';
+
+interface Props {
+  projects: ProjectListItem[];
+}
+
+const { projects } = Astro.props;
+const slides = projects.flatMap(({ slug, title, coverImage }) =>
+  coverImage?.asset
+    ? [{ image: coverImage, href: `/projects/${slug}`, label: title, viewTransitionName: `cover-${slug}` }]
+    : [],
+);
+---
+
+{
+  projects.length === 0 ? (
+    <p class:list={[contentText, 'text-muted']}>No projects published yet.</p>
+  ) : (
+    slides.length > 0 && (
+      // Persisted so moving between / and /projects, which both show it, doesn't restart it.
+      <div transition:persist="cover-slideshow" transition:animate="none">
+        <Slideshow slides={slides} label="Projects" controls="corner" eager />
+      </div>
+    )
+  )
+}

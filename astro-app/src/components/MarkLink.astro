@@ -1,0 +1,15 @@
+---
+import type { Props } from 'astro-portabletext/types';
+import type { PortableTextMarkDefinition } from '@portabletext/types';
+
+interface LinkMark extends PortableTextMarkDefinition {
+  href: string;
+  blank?: boolean;
+}
+
+const { node } = Astro.props as Props<LinkMark>;
+---
+
+<a href={node.href} target={node.blank ? '_blank' : undefined} rel={node.blank ? 'noopener noreferrer' : undefined}
+  ><slot /></a
+>

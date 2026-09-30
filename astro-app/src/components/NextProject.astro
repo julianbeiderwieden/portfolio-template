@@ -1,0 +1,16 @@
+---
+import type { ProjectListItem } from '../utils/sanity';
+
+interface Props {
+  project: ProjectListItem;
+}
+
+const { project } = Astro.props;
+---
+
+<nav aria-label="Next project" class="mt-16 text-right text-xs md:mt-24">
+  <a href={`/projects/${project.slug}`} class="inline-block transition-colors duration-150 hover:text-muted">
+    <span class="block text-muted">Next project</span>
+    <span class="block">{project.title}</span>
+  </a>
+</nav>

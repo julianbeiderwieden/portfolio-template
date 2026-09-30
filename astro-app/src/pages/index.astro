@@ -1,0 +1,12 @@
+---
+import Layout from '../layouts/Layout.astro';
+import CoverSlideshow from '../components/CoverSlideshow.astro';
+import { getProjectList } from '../utils/sanity';
+
+const projects = await getProjectList();
+---
+
+<Layout>
+  <h1 class="sr-only">Projects</h1>
+  <CoverSlideshow projects={projects} />
+</Layout>

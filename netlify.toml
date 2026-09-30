@@ -1,0 +1,23 @@
+[build]
+  command = "npm ci && npm run build --workspace=astro-app"
+  publish = "astro-app/dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Netlify's default `npm install` can fail on workspace monorepos when the
+  # dependency cache is stale (npm arborist ERR_INVALID_ARG_TYPE). Skip it and
+  # use a clean, lockfile-driven install in the build command instead.
+  NPM_FLAGS = "--version"
+  # Sanity dataset names are public identifiers, not credentials.
+  SECRETS_SCAN_OMIT_KEYS = "PUBLIC_SANITY_STUDIO_DATASET"
+
+[[headers]]
+  for = "/*"
+
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; connect-src 'self' https://*.sanity.io; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob: https://*.sanity.io; manifest-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; upgrade-insecure-requests"
+    Permissions-Policy = "camera=(), geolocation=(), microphone=()"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"

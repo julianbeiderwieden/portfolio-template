@@ -1,0 +1,234 @@
+---
+import type { ProjectListItem } from '../utils/sanity';
+import { currentPath, isProjectsPath } from '../utils/nav';
+
+interface Props {
+  siteTitle: string;
+  projects: ProjectListItem[];
+  navFooterText?: string;
+}
+
+const { siteTitle, projects, navFooterText } = Astro.props;
+const path = currentPath(Astro.url);
+const projectsActive = isProjectsPath(path);
+
+const isHome = path === '/';
+const projectsIndex = path === '/projects';
+
+/** current: the route's own link, stays black while another link is hovered.
+ *  highlighted: black by default (all links on `/`, all titles on `/projects`), gray while another link is hovered. */
+type LinkState = 'current' | 'highlighted' | 'inactive';
+
+const links = [
+  { href: '/projects', label: 'Projects', state: projectsActive ? 'current' : isHome ? 'highlighted' : 'inactive' },
+  { href: '/about', label: 'About', state: path === '/about' ? 'current' : isHome ? 'highlighted' : 'inactive' },
+  { href: '/contact', label: 'Contact', state: path === '/contact' ? 'current' : isHome ? 'highlighted' : 'inactive' },
+] satisfies { href: string; label: string; state: LinkState }[];
+
+const legalLinks = [
+  { href: '/imprint', label: 'Imprint' },
+  { href: '/privacy', label: 'Privacy' },
+];
+
+const linkBase =
+  'transition-colors duration-150 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none';
+
+const legalLinkClass = 'text-foreground focus-visible:underline focus-visible:outline-none';
+
+const navLinkClass = (state: LinkState) =>
+  ({
+    current: `${linkBase} text-foreground`,
+    highlighted: `${linkBase} text-foreground group-has-[a:hover]/nav:not-hover:text-muted`,
+    inactive: `${linkBase} text-muted`,
+  })[state];
+---
+
+<header
+  class="flex flex-col px-4 pt-4 pb-6 md:sticky md:top-0 md:h-dvh md:overflow-y-auto md:px-5 md:pt-5 md:pb-5"
+  transition:animate="none"
+>
+  <a href="/" class="text-body tracking-tight">{siteTitle}</a>
+
+  <nav aria-label="Main navigation" class="group/nav mt-8 md:mt-12">
+    <ul class="text-body tracking-tight">
+      {
+        links.map(link => (
+          <li>
+            <a href={link.href} class={navLinkClass(link.state)} aria-current={path === link.href ? 'page' : undefined}>
+              {link.label}
+            </a>
+            {link.href === '/projects' && projects.length > 0 && (
+              // On every page, hidden where it doesn't belong: a click can then open it at once, before the new
+              // page has loaded. The link classes per state let the script show the target page's colors.
+              <ul
+                id="project-list"
+                class="pl-6"
+                aria-label="Projects"
+                hidden={!projectsActive}
+                data-current={navLinkClass('current')}
+                data-highlighted={navLinkClass('highlighted')}
+                data-inactive={navLinkClass('inactive')}
+              >
+                {projects.map(project => {
+                  const href = `/projects/${project.slug}`;
+                  const active = path === href;
+                  return (
+                    <li>
+                      <a
+                        href={href}
+                        class={navLinkClass(active ? 'current' : projectsIndex ? 'highlighted' : 'inactive')}
+                        aria-current={active ? 'page' : undefined}
+                        data-preview-slug={project.coverImage?.asset && !active ? project.slug : undefined}
+                      >
+                        {project.title}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </li>
+        ))
+      }
+    </ul>
+  </nav>
+
+  <nav aria-label="Legal" class="mt-8 md:mt-auto md:pt-8">
+    {navFooterText && <p class="mb-4 whitespace-pre-line text-xs leading-none text-foreground">{navFooterText}</p>}
+    <ul class="flex gap-x-4 text-xs leading-none">
+      {
+        legalLinks.map(link => (
+          <li>
+            <a href={link.href} class={legalLinkClass} aria-current={path === link.href ? 'page' : undefined}>
+              {link.label}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </nav>
+</header>
+
+<script>
+  import { currentPath, isProjectsPath } from '../utils/nav';
+
+  // Opening: the space opens with a gentle start and a long, soft ease-out (the lightbox's curve). The titles
+  // fade in linearly on top, starting a little later and ending after it, so the fade is actually seen.
+  const EXPAND_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)';
+  const EXPAND_MS = 450;
+  const FADE_IN_DELAY_MS = 100;
+  const FADE_IN_MS = 500;
+  // Closing is faster: the titles fade out first, the space collapses right behind them.
+  const CLOSE_EASING = 'cubic-bezier(0.23, 1, 0.32, 1)';
+  const FADE_OUT_MS = 150;
+  const COLLAPSE_DELAY_MS = 50;
+  const COLLAPSE_MS = 250;
+
+  /**
+   * The list opens or closes the moment a navigation starts, on the old page, instead of once the new page has
+   * loaded. When the new page is swapped in, its list (or, when closing, a copy of the old one) picks the
+   * animation up at the same point.
+   */
+  let running: { opening: boolean; start: number; ghost?: HTMLElement } | undefined;
+
+  type LinkState = 'current' | 'highlighted' | 'inactive';
+
+  /** The link colors the target page will render, so nothing changes when it arrives. */
+  function setLinkStates(list: HTMLElement, path: string) {
+    for (const link of list.querySelectorAll('a')) {
+      const state: LinkState =
+        link.getAttribute('href') === path ? 'current' : path === '/projects' ? 'highlighted' : 'inactive';
+      link.className = list.dataset[state] ?? link.className;
+    }
+  }
+
+  // The swap removes the list, so a non-interactive copy finishes the closing animation. Link colors are
+  // frozen because hover-dependent grays would otherwise reset to black in the new DOM.
+  function createGhost(list: HTMLElement) {
+    const ghost = list.cloneNode(true) as HTMLElement;
+    const sourceLinks = list.querySelectorAll('a');
+    ghost.querySelectorAll('a').forEach((link, i) => {
+      link.style.color = getComputedStyle(sourceLinks[i]).color;
+      link.style.transition = 'none';
+    });
+    ghost.removeAttribute('id');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.inert = true;
+    ghost.style.overflow = 'hidden';
+    return ghost;
+  }
+
+  function reveal(list: HTMLElement, elapsed = 0) {
+    list.style.overflow = 'hidden';
+    const height = list.animate([{ height: '0px' }, { height: `${list.scrollHeight}px` }], {
+      duration: EXPAND_MS,
+      easing: EXPAND_EASING,
+    });
+    const fade = list.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: FADE_IN_MS,
+      delay: FADE_IN_DELAY_MS,
+      easing: 'linear',
+      fill: 'backwards',
+    });
+    height.currentTime = fade.currentTime = elapsed;
+    height.addEventListener('finish', () => list.style.removeProperty('overflow'));
+  }
+
+  function collapse(list: HTMLElement, elapsed = 0) {
+    list.style.overflow = 'hidden';
+    const fade = list.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: FADE_OUT_MS,
+      easing: CLOSE_EASING,
+      fill: 'forwards',
+    });
+    const height = list.animate([{ height: `${list.scrollHeight}px` }, { height: '0px' }], {
+      duration: COLLAPSE_MS,
+      delay: COLLAPSE_DELAY_MS,
+      easing: CLOSE_EASING,
+      fill: 'forwards',
+    });
+    fade.currentTime = height.currentTime = elapsed;
+    return height;
+  }
+
+  document.addEventListener('astro:before-preparation', event => {
+    running = undefined;
+    const list = document.getElementById('project-list');
+    if (!list || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const to = currentPath(event.to);
+    const opening = isProjectsPath(to);
+    // Shown on both pages or on neither: nothing to animate.
+    if (opening === !list.hidden) return;
+
+    running = { opening, start: performance.now() };
+    if (opening) {
+      setLinkStates(list, to);
+      list.hidden = false;
+      reveal(list);
+    } else {
+      collapse(list);
+    }
+  });
+
+  document.addEventListener('astro:before-swap', () => {
+    const list = document.getElementById('project-list');
+    if (running && !running.opening && list) running.ghost = createGhost(list);
+  });
+
+  document.addEventListener('astro:after-swap', () => {
+    const animation = running;
+    running = undefined;
+    if (!animation) return;
+    const elapsed = performance.now() - animation.start;
+    const list = document.getElementById('project-list');
+
+    if (animation.opening) {
+      if (list && !list.hidden) reveal(list, elapsed);
+    } else if (animation.ghost) {
+      const { ghost } = animation;
+      (list ?? document.querySelector('header nav a[href="/projects"]'))?.after(ghost);
+      if (!ghost.isConnected) return;
+      collapse(ghost, elapsed).addEventListener('finish', () => ghost.remove());
+    }
+  });
+</script>

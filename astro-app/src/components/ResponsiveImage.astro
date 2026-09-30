@@ -1,0 +1,73 @@
+---
+import { imageSrcSet, imageUrl, type ImageAsset, type ImageUrlOptions } from '../utils/sanity';
+
+type ImageLoading = 'eager' | 'lazy';
+type ImageDecoding = 'async' | 'auto' | 'sync';
+type FetchPriority = 'high' | 'low' | 'auto';
+
+interface Props {
+  asset?: ImageAsset;
+  alt: string;
+  class?: string;
+  sizes?: string;
+  widths?: number[];
+  width?: number;
+  height?: number;
+  quality?: number;
+  fit?: ImageUrlOptions['fit'];
+  loading?: ImageLoading;
+  decoding?: ImageDecoding;
+  fetchpriority?: FetchPriority;
+  onload?: string;
+  onerror?: string;
+  /** Starts transparent and fades in once loaded; Layout marks images the handler missed. */
+  fadeIn?: boolean;
+}
+
+const {
+  asset,
+  alt,
+  class: className,
+  sizes = '100vw',
+  widths = [640, 960, 1280, 1600, 1920, 2400],
+  width,
+  height,
+  quality = 75,
+  fit = 'crop',
+  loading = 'lazy',
+  decoding = 'async',
+  fetchpriority,
+  onload,
+  onerror,
+  fadeIn = false,
+} = Astro.props;
+
+const fallbackWidth = width ?? widths[widths.length - 1];
+const fallbackHeight = width && height && fallbackWidth ? Math.round(fallbackWidth * (height / width)) : height;
+const src = asset ? imageUrl(asset, { width: fallbackWidth, height: fallbackHeight, quality, fit }) : undefined;
+const srcset = asset ? imageSrcSet(asset, widths, { width, height, quality, fit }) : undefined;
+---
+
+{
+  asset && src && (
+    <img
+      src={src}
+      srcset={srcset}
+      sizes={srcset ? sizes : undefined}
+      alt={alt}
+      class:list={[
+        className,
+        fadeIn &&
+          'opacity-0 transition-opacity duration-300 ease-out data-loaded:opacity-100 motion-reduce:transition-none',
+      ]}
+      data-fade={fadeIn ? '' : undefined}
+      width={width}
+      height={height}
+      loading={loading}
+      decoding={decoding}
+      fetchpriority={fetchpriority}
+      onload={fadeIn ? "this.toggleAttribute('data-loaded', true)" : onload}
+      onerror={onerror}
+    />
+  )
+}

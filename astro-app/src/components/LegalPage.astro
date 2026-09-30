@@ -1,0 +1,27 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PortableText from './PortableText.astro';
+import { getLegalPage } from '../utils/sanity';
+import { contentText, richText } from '../utils/ui';
+
+interface Props {
+  id: 'imprint' | 'privacy';
+  fallbackTitle: string;
+}
+
+const { id, fallbackTitle } = Astro.props;
+const page = await getLegalPage(id);
+const title = page?.title?.trim() || fallbackTitle;
+const body = page?.body?.length ? page.body : undefined;
+---
+
+<Layout title={title}>
+  <h1 class={contentText}>{title}</h1>
+  {
+    body ? (
+      <PortableText value={body} class:list={[richText, 'mt-[0.9em]']} />
+    ) : (
+      <p class:list={[contentText, 'mt-[0.9em] text-muted']}>This page has no content yet.</p>
+    )
+  }
+</Layout>

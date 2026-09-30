@@ -1,0 +1,534 @@
+---
+/** Enlarges every <Figure zoomable /> on the page. Render once per page. */
+import IconButton from './IconButton.astro';
+---
+
+<dialog
+  class="fixed inset-0 m-0 size-full max-h-none max-w-none cursor-zoom-out overflow-hidden bg-transparent p-0 text-foreground backdrop:bg-transparent"
+  aria-label="Image viewer"
+  data-lightbox
+>
+  <div class="absolute inset-0 bg-background/80 opacity-0 backdrop-blur-md" data-lightbox-backdrop></div>
+  <div
+    class="absolute origin-top-left bg-placeholder bg-(image:--lqip) bg-cover has-[[data-lightbox-full][data-loaded]]:bg-none"
+    data-lightbox-frame
+  >
+    <img class="absolute inset-0 size-full" alt="" data-lightbox-preview />
+    <img
+      class="absolute inset-0 size-full opacity-0 transition-opacity duration-200 data-loaded:opacity-100"
+      alt=""
+      decoding="async"
+      data-lightbox-full
+    />
+  </div>
+  <div
+    class="pointer-events-none absolute inset-[env(safe-area-inset-top)_env(safe-area-inset-right)_env(safe-area-inset-bottom)_env(safe-area-inset-left)]"
+    data-lightbox-ui
+  >
+    {/* The area the enlarged image is fitted into, clear of the controls. */}
+    <div class="absolute inset-x-4 inset-y-18 md:inset-x-20 md:inset-y-5" data-lightbox-stage></div>
+    <p class="absolute text-meta text-muted transition-opacity duration-150" hidden data-lightbox-caption></p>
+    <IconButton
+      icon="close"
+      label="Close"
+      class="pointer-events-auto absolute top-4 right-4 md:top-5 md:right-5"
+      data-lightbox-control
+      data-lightbox-close
+    />
+    {/* Anchored to the viewport edges, so they stay put whatever the image's aspect ratio. */}
+    <IconButton
+      icon="previous"
+      label="Previous image"
+      class="pointer-events-auto absolute bottom-4 left-4 md:top-1/2 md:bottom-auto md:left-5 md:-translate-y-1/2"
+      data-lightbox-control
+      data-lightbox-prev
+    />
+    <IconButton
+      icon="next"
+      label="Next image"
+      class="pointer-events-auto absolute right-4 bottom-4 md:top-1/2 md:right-5 md:bottom-auto md:-translate-y-1/2"
+      data-lightbox-control
+      data-lightbox-next
+    />
+    <p class="sr-only" aria-live="polite" data-lightbox-status></p>
+  </div>
+</dialog>
+
+<script>
+  import { onHorizontalSwipe } from '../utils/swipe';
+
+  type Rect = { left: number; top: number; width: number; height: number };
+
+  // iOS-like curve: fast start for instant feedback, long soft landing.
+  const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+  const OPEN_MS = 400;
+  const CLOSE_MS = 300;
+  // Reduced motion: crossfade only, no movement.
+  const FADE_MS = 200;
+  // Zooming in or out, and springing back after a drag that didn't close.
+  const SETTLE_MS = 300;
+  // Space between image and caption, as in Figure (mt-2).
+  const CAPTION_GAP = 8;
+  // Zooming that adds less than this isn't worth it; such images close on click instead.
+  const MIN_ZOOM = 1.25;
+  const MAX_ZOOM = 4;
+  // Dragging the image down closes it past this distance, or as a quick flick (px per ms) past the minimum.
+  const DISMISS_DISTANCE = 120;
+  const DISMISS_MIN_DISTANCE = 30;
+  const DISMISS_VELOCITY = 0.11;
+  // Movement that makes a touch a drag rather than a tap.
+  const DRAG_THRESHOLD = 8;
+
+  const transition = (duration: number, ...properties: string[]) =>
+    properties.map(property => `${property} ${duration}ms ${EASE}`).join(', ');
+
+  /** Transform that makes an element laid out at `to` appear at `from` (origin top left). */
+  const flip = (from: Rect, to: Rect) =>
+    `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`;
+
+  let teardown: (() => void) | undefined;
+
+  function setup() {
+    teardown?.();
+    teardown = undefined;
+
+    const dialog = document.querySelector<HTMLDialogElement>('[data-lightbox]');
+    const items = [...document.querySelectorAll<HTMLElement>('[data-lightbox-trigger]')].flatMap(trigger => {
+      const thumb = trigger.querySelector('img');
+      const caption = trigger.closest('figure')?.querySelector('figcaption')?.textContent?.trim() ?? '';
+      return thumb ? [{ trigger, thumb, caption }] : [];
+    });
+    if (!dialog || items.length === 0) return;
+
+    const part = <T extends Element = HTMLElement>(name: string) => dialog.querySelector<T>(`[data-lightbox-${name}]`)!;
+    const backdrop = part('backdrop');
+    const frame = part('frame');
+    const preview = part<HTMLImageElement>('preview');
+    const ui = part('ui');
+    const stage = part('stage');
+    const caption = part('caption');
+    const status = part('status');
+    const prev = part<HTMLButtonElement>('prev');
+    const next = part<HTMLButtonElement>('next');
+    let full = part<HTMLImageElement>('full');
+    const fullTemplate = full.cloneNode() as HTMLImageElement;
+    const root = document.documentElement;
+
+    let state: 'closed' | 'opening' | 'open' | 'closing' = 'closed';
+    let current = 0;
+    let target: Rect = { left: 0, top: 0, width: 0, height: 0 };
+    let morph = true;
+    let closeTimer: number | undefined;
+    /** Zoomed in: the scale, and where the image's top left corner sits in the viewport. */
+    let zoom: { scale: number; x: number; y: number } | undefined;
+    let zoomedAt = 0;
+    /** A touch in progress: where it started, and once it moved, along which axis (or panning the zoom). */
+    let gesture: { x: number; y: number; time: number; axis?: 'x' | 'y'; pan?: { x: number; y: number } } | undefined;
+    /** A drag can still end in a click; ignore clicks until then. */
+    let ignoreClicksUntil = 0;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    prev.hidden = next.hidden = items.length < 2;
+
+    /**
+     * Largest rect with the image's aspect ratio that fits the stage, never past its original size.
+     * `reserve` keeps that much height free below it; the image and that space are centered together.
+     */
+    function fit(thumb: HTMLImageElement, reserve = 0): Rect {
+      const area = stage.getBoundingClientRect();
+      const areaHeight = Math.max(0, area.height - reserve);
+      const naturalWidth = Number(thumb.getAttribute('width'));
+      const naturalHeight = Number(thumb.getAttribute('height'));
+      const ratio =
+        naturalWidth && naturalHeight ? naturalWidth / naturalHeight : thumb.offsetWidth / thumb.offsetHeight;
+      const width = Math.min(area.width, areaHeight * ratio, naturalWidth || Infinity);
+      const height = width / ratio;
+      return { left: area.left + (area.width - width) / 2, top: area.top + (areaHeight - height) / 2, width, height };
+    }
+
+    /** Fits the current image with its caption below, wrapped to the image's width like on the page. */
+    function layout() {
+      const { thumb, caption: text } = items[current];
+      caption.textContent = text;
+      caption.hidden = !text;
+      target = fit(thumb);
+
+      // A taller caption shrinks the image, which narrows the caption again: settle in a few passes.
+      let reserve = 0;
+      for (let pass = 0; text && pass < 3; pass++) {
+        caption.style.width = `${target.width}px`;
+        const height = caption.offsetHeight + CAPTION_GAP;
+        if (height === reserve) break;
+        reserve = height;
+        target = fit(thumb, reserve);
+      }
+
+      frame.style.left = `${target.left}px`;
+      frame.style.top = `${target.top}px`;
+      frame.style.width = `${target.width}px`;
+      frame.style.height = `${target.height}px`;
+
+      const origin = ui.getBoundingClientRect();
+      caption.style.left = `${target.left - origin.left}px`;
+      caption.style.top = `${target.top + target.height + CAPTION_GAP - origin.top}px`;
+      caption.style.width = `${target.width}px`;
+    }
+
+    /** The thumbnail's already loaded file shows instantly while the sharp one loads on top. */
+    function setPreview(thumb: HTMLImageElement) {
+      if (!thumb.currentSrc) preview.removeAttribute('src');
+      else if (preview.src !== thumb.currentSrc) preview.src = thumb.currentSrc;
+    }
+
+    function loadFull(thumb: HTMLImageElement, width: number, image: HTMLImageElement) {
+      image.sizes = `${Math.ceil(width)}px`;
+      image.srcset = thumb.srcset;
+      image.src = thumb.src;
+    }
+
+    /** How far the current image can grow before it turns soft: to its original width, at most the largest file. */
+    function zoomScale() {
+      const { thumb } = items[current];
+      const files = [...thumb.srcset.matchAll(/(\d+)w/g)].map(match => Number(match[1]));
+      const largest = Math.min(Number(thumb.getAttribute('width')) || Infinity, Math.max(...files, 0) || Infinity);
+      return Math.min(largest / target.width, MAX_ZOOM);
+    }
+
+    const canZoom = () => zoomScale() >= MIN_ZOOM;
+
+    function updateCursor() {
+      frame.style.cursor = zoom ? 'zoom-out' : canZoom() ? 'zoom-in' : '';
+    }
+
+    function applyZoom() {
+      if (zoom)
+        frame.style.transform = `translate(${zoom.x - target.left}px, ${zoom.y - target.top}px) scale(${zoom.scale})`;
+    }
+
+    /** Keeps the zoomed image covering the viewport, or centered along an axis where it is smaller. */
+    function clampZoom() {
+      if (!zoom) return;
+      const width = target.width * zoom.scale;
+      const height = target.height * zoom.scale;
+      zoom.x = width > innerWidth ? Math.min(0, Math.max(innerWidth - width, zoom.x)) : (innerWidth - width) / 2;
+      zoom.y = height > innerHeight ? Math.min(0, Math.max(innerHeight - height, zoom.y)) : (innerHeight - height) / 2;
+    }
+
+    /** The pointer's position across the viewport picks the part of the image shown: left edge, left side. */
+    function panTo(clientX: number, clientY: number) {
+      if (!zoom) return;
+      zoom.x = (innerWidth - target.width * zoom.scale) * (clientX / innerWidth);
+      zoom.y = (innerHeight - target.height * zoom.scale) * (clientY / innerHeight);
+      clampZoom();
+      applyZoom();
+    }
+
+    function zoomIn(clientX: number, clientY: number) {
+      zoom = { scale: zoomScale(), x: 0, y: 0 };
+      zoomedAt = performance.now();
+      full.sizes = `${Math.ceil(target.width * zoom.scale)}px`; // Fetches a sharper file where there is one.
+      frame.style.transition = transition(SETTLE_MS, 'transform');
+      caption.style.opacity = '0';
+      panTo(clientX, clientY);
+      updateCursor();
+    }
+
+    function zoomOut(animate = true) {
+      if (!zoom) return;
+      zoom = undefined;
+      frame.style.transition = animate ? transition(SETTLE_MS, 'transform') : 'none';
+      frame.style.transform = '';
+      caption.style.opacity = '';
+      updateCursor();
+    }
+
+    function show(index: number) {
+      const { trigger, thumb, caption: text } = items[index];
+      zoomOut(false);
+      current = index;
+      // Lets a slideshow switch to the slide holding this image.
+      document.dispatchEvent(new CustomEvent('lightbox:change', { detail: { trigger } }));
+      layout();
+      setPreview(thumb);
+      // The page's blurred preview, only while there is no loaded file to show (and gone once the sharp one is in).
+      frame.style.setProperty('--lqip', thumb.currentSrc ? '' : trigger.style.getPropertyValue('--lqip'));
+
+      // A fresh element, so a stale load can't reveal the wrong image and `load` fires even when cached.
+      const image = fullTemplate.cloneNode() as HTMLImageElement;
+      image.alt = thumb.alt;
+      image.addEventListener('load', () => image.toggleAttribute('data-loaded', true), { once: true });
+      loadFull(thumb, target.width, image);
+      full.replaceWith(image);
+      full = image;
+      updateCursor();
+
+      const description = [thumb.alt, text].filter(Boolean).join('. ');
+      status.textContent = `Image ${index + 1} of ${items.length}${description ? `: ${description}` : ''}`;
+      if (items.length > 1) {
+        for (const step of [-1, 1]) {
+          const neighbor = items[(index + step + items.length) % items.length].thumb;
+          loadFull(neighbor, fit(neighbor).width, new Image());
+        }
+      }
+    }
+
+    function lockScroll() {
+      // Pad by the scrollbar's width so hiding it doesn't shift the page. Not scrollbar-gutter:
+      // a stable gutter shrinks vw, and with it the vw-based font size.
+      const scrollbarWidth = innerWidth - root.clientWidth;
+      if (scrollbarWidth > 0) root.style.paddingRight = `${scrollbarWidth}px`;
+      root.style.overflow = 'hidden';
+    }
+
+    function unlockScroll() {
+      root.style.removeProperty('overflow');
+      root.style.removeProperty('padding-right');
+    }
+
+    async function open(index: number) {
+      if (state !== 'closed') return;
+      state = 'opening';
+      const { trigger, thumb } = items[index];
+      setPreview(thumb);
+      await preview.decode().catch(() => {});
+      if (state !== 'opening') return;
+
+      morph = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const from = thumb.getBoundingClientRect();
+      lockScroll();
+      dialog!.showModal();
+      show(index);
+
+      // Start exactly on top of the thumbnail, then grow into place.
+      frame.style.transition = backdrop.style.transition = ui.style.transition = 'none';
+      backdrop.style.opacity = ui.style.opacity = '0';
+      if (morph) {
+        frame.style.transform = flip(from, target);
+        trigger.style.visibility = 'hidden';
+      } else {
+        frame.style.opacity = '0';
+      }
+      frame.getBoundingClientRect(); // Commit the start state so the change below transitions.
+
+      const duration = morph ? OPEN_MS : FADE_MS;
+      frame.style.transition = transition(duration, 'transform', 'opacity');
+      backdrop.style.transition = ui.style.transition = transition(duration, 'opacity');
+      frame.style.transform = frame.style.opacity = '';
+      backdrop.style.opacity = ui.style.opacity = '1';
+      state = 'open';
+    }
+
+    function go(step: number) {
+      if (state !== 'open' || items.length < 2) return;
+      items[current].trigger.style.visibility = '';
+      const index = (current + step + items.length) % items.length;
+      const { trigger, thumb } = items[index];
+
+      // Scroll the page behind the backdrop to this image, so closing lands on it.
+      const rect = thumb.getBoundingClientRect();
+      if (rect.top < 0 || rect.bottom > innerHeight) thumb.scrollIntoView({ block: 'center', behavior: 'instant' });
+      if (morph) trigger.style.visibility = 'hidden';
+
+      // Switching is frequent and often keyboard-driven: no animation.
+      frame.style.transition = 'none';
+      frame.style.transform = '';
+      show(index);
+    }
+
+    function close() {
+      if (state !== 'open') return;
+      state = 'closing';
+      zoom = undefined;
+      const { thumb } = items[current];
+      const duration = morph ? CLOSE_MS : FADE_MS;
+
+      // Transitions retarget from wherever the image is: mid-opening, zoomed in or dragged down.
+      frame.style.transition = transition(duration, 'transform', 'opacity');
+      backdrop.style.transition = transition(duration, 'opacity');
+      ui.style.transition = transition(Math.min(duration, 150), 'opacity');
+      if (morph) frame.style.transform = flip(thumb.getBoundingClientRect(), target);
+      else frame.style.opacity = '0';
+      backdrop.style.opacity = ui.style.opacity = '0';
+      closeTimer = window.setTimeout(finish, duration);
+    }
+
+    function finish() {
+      clearTimeout(closeTimer);
+      if (state === 'closed') return;
+      const wasShown = state !== 'opening';
+      state = 'closed';
+      zoom = undefined;
+      gesture = undefined;
+
+      const { trigger } = items[current];
+      trigger.style.visibility = '';
+      if (dialog!.open) dialog!.close();
+      unlockScroll();
+      for (const el of [frame, backdrop, ui]) el.style.removeProperty('transition');
+      frame.style.transform = frame.style.opacity = backdrop.style.opacity = ui.style.opacity = '';
+      caption.style.opacity = '';
+      if (wasShown) trigger.focus({ preventScroll: true });
+      document.dispatchEvent(new CustomEvent('lightbox:change', { detail: {} }));
+    }
+
+    /** After a drag down that didn't close: back into place. */
+    function springBack() {
+      frame.style.transition = transition(SETTLE_MS, 'transform');
+      backdrop.style.transition = ui.style.transition = transition(SETTLE_MS, 'opacity');
+      frame.style.transform = '';
+      backdrop.style.opacity = ui.style.opacity = '1';
+    }
+
+    items.forEach(({ trigger }, index) => trigger.addEventListener('click', () => open(index), { signal }));
+    prev.addEventListener('click', () => go(-1), { signal });
+    next.addEventListener('click', () => go(1), { signal });
+    part('close').addEventListener('click', close, { signal });
+
+    // A click on the image zooms in and out where it can; anywhere else outside the controls closes.
+    dialog.addEventListener(
+      'click',
+      event => {
+        const element = event.target as Element;
+        if (state !== 'open' || element.closest('[data-lightbox-control]') || performance.now() < ignoreClicksUntil) {
+          return;
+        }
+        if (frame.contains(element) && zoom) zoomOut();
+        else if (frame.contains(element) && canZoom()) zoomIn(event.clientX, event.clientY);
+        else close();
+      },
+      { signal },
+    );
+    dialog.addEventListener(
+      'pointermove',
+      event => {
+        if (!zoom || event.pointerType !== 'mouse') return;
+        // Glide along with the zoom-in, then follow the pointer directly.
+        if (performance.now() - zoomedAt > SETTLE_MS) frame.style.transition = 'none';
+        panTo(event.clientX, event.clientY);
+      },
+      { signal },
+    );
+    dialog.addEventListener(
+      'keydown',
+      event => {
+        if (event.key === 'ArrowLeft') go(-1);
+        else if (event.key === 'ArrowRight') go(1);
+        else return;
+        event.preventDefault();
+      },
+      { signal },
+    );
+    // Escape: animate out instead of the dialog's instant close.
+    dialog.addEventListener(
+      'cancel',
+      event => {
+        event.preventDefault();
+        close();
+      },
+      { signal },
+    );
+    // The browser can still force the dialog shut; restore the page if it does.
+    dialog.addEventListener('close', finish, { signal });
+
+    // Not after a drag down: one diagonal gesture shouldn't switch the image and then close it.
+    onHorizontalSwipe(dialog, step => go(step), { signal, enabled: () => !zoom && gesture?.axis !== 'y' });
+
+    // Touch: drag the image down to close it, or move around in it while zoomed in.
+    dialog.addEventListener(
+      'touchstart',
+      event => {
+        // A second finger mid-drag ends the drag: put the image back rather than leave it half dragged.
+        if (gesture?.axis === 'y' && !zoom) springBack();
+        const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+        // A second finger means pinch-zoom, which the browser handles.
+        gesture =
+          touch && state === 'open' && (visualViewport?.scale ?? 1) <= 1
+            ? { x: touch.clientX, y: touch.clientY, time: event.timeStamp, pan: zoom && { x: zoom.x, y: zoom.y } }
+            : undefined;
+      },
+      { signal, passive: true },
+    );
+    dialog.addEventListener(
+      'touchmove',
+      event => {
+        if (!gesture || event.touches.length !== 1) return;
+        const touch = event.touches[0];
+        const dx = touch.clientX - gesture.x;
+        const dy = touch.clientY - gesture.y;
+        if (!gesture.axis && Math.max(Math.abs(dx), Math.abs(dy)) > DRAG_THRESHOLD) {
+          gesture.axis = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+        }
+
+        if (zoom && gesture.pan) {
+          event.preventDefault();
+          frame.style.transition = 'none';
+          zoom.x = gesture.pan.x + dx;
+          zoom.y = gesture.pan.y + dy;
+          clampZoom();
+          applyZoom();
+          return;
+        }
+        if (gesture.axis !== 'y') return;
+
+        event.preventDefault();
+        // Down follows the finger; up meets growing resistance instead of a hard stop.
+        const offset = dy > 0 ? dy : -Math.sqrt(-dy) * 3;
+        const progress = Math.min(1, Math.max(0, dy) / (innerHeight / 2));
+        frame.style.transition = backdrop.style.transition = ui.style.transition = 'none';
+        frame.style.transform = `translateY(${offset}px)`;
+        backdrop.style.opacity = String(1 - progress);
+        ui.style.opacity = String(Math.max(0, 1 - progress * 2));
+      },
+      { signal, passive: false },
+    );
+    dialog.addEventListener(
+      'touchend',
+      event => {
+        const touch = gesture;
+        gesture = undefined;
+        if (!touch?.axis) return;
+        ignoreClicksUntil = performance.now() + 400;
+        if (touch.axis !== 'y' || zoom) return;
+
+        const dy = event.changedTouches[0].clientY - touch.y;
+        const velocity = dy / (event.timeStamp - touch.time);
+        const dismissed = dy > DISMISS_DISTANCE || (dy > DISMISS_MIN_DISTANCE && velocity > DISMISS_VELOCITY);
+        if (dismissed) close();
+        else springBack();
+      },
+      { signal },
+    );
+    dialog.addEventListener(
+      'touchcancel',
+      () => {
+        if (gesture?.axis === 'y' && !zoom) springBack();
+        gesture = undefined;
+      },
+      { signal },
+    );
+
+    window.addEventListener(
+      'resize',
+      () => {
+        if (state !== 'open') return;
+        zoomOut(false);
+        layout();
+        full.sizes = `${Math.ceil(target.width)}px`;
+        updateCursor();
+      },
+      { signal },
+    );
+
+    teardown = () => {
+      finish();
+      controller.abort();
+    };
+  }
+
+  document.addEventListener('astro:page-load', setup);
+  document.addEventListener('astro:before-swap', () => {
+    teardown?.();
+    teardown = undefined;
+  });
+</script>

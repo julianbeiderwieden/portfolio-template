@@ -1,0 +1,19 @@
+---
+import Layout from '../layouts/Layout.astro';
+import PortableText from '../components/PortableText.astro';
+import { getContact } from '../utils/sanity';
+import { contentText, richText } from '../utils/ui';
+
+const contact = await getContact();
+const body = contact?.text?.length ? contact.text : undefined;
+---
+
+<Layout title={contact?.seoTitle ?? 'Contact'} description={contact?.seoDescription}>
+  {
+    body ? (
+      <PortableText value={body} class={richText} />
+    ) : (
+      <p class:list={[contentText, 'text-muted']}>This page has no content yet.</p>
+    )
+  }
+</Layout>

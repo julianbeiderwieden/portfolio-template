@@ -1,0 +1,14 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { contentText } from '../utils/ui';
+---
+
+<Layout title="Page not found" description="The requested page could not be found." noindex>
+  <div class={contentText}>
+    <p class="text-muted">404</p>
+    <h1>This page doesn’t exist or has been moved.</h1>
+    <a href="/" class="mt-[1.2em] inline-block underline decoration-2 underline-offset-4 hover:text-muted">
+      Back to the homepage
+    </a>
+  </div>
+</Layout>

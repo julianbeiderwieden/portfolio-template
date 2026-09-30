@@ -1,0 +1,83 @@
+---
+import ResponsiveImage from './ResponsiveImage.astro';
+import type { SanityImage } from '../utils/sanity';
+
+interface Props {
+  image: SanityImage;
+  sizes?: string;
+  eager?: boolean;
+  /** Opens the image in the page's <Lightbox /> on click. */
+  zoomable?: boolean;
+  /** Keeps the caption for screen readers only, when it is shown elsewhere (a slideshow's control row). */
+  hideCaption?: boolean;
+  /** Morphs the image into the element with the same name on the next page (View Transitions). */
+  viewTransitionName?: string;
+  class?: string;
+}
+
+const {
+  image,
+  sizes = '(min-width: 768px) 50vw, 100vw',
+  eager = false,
+  zoomable = false,
+  hideCaption = false,
+  viewTransitionName,
+  class: className,
+} = Astro.props;
+const { width, height, lqip } = image.asset;
+const alt = image.alt ?? '';
+const imageProps = {
+  asset: image.asset,
+  alt,
+  sizes,
+  width,
+  height,
+  fit: 'max',
+  loading: eager ? 'eager' : 'lazy',
+  fetchpriority: eager ? 'high' : undefined,
+  fadeIn: true,
+  class: 'h-auto max-h-[70vh] w-full object-contain',
+} as const;
+
+// The frame around the image sets its size and shows the blurred preview until the image has loaded.
+// A variable, not an inline background-image, so the class can drop it once loaded (transparent images).
+const frameClass =
+  'block w-full max-w-[calc(70vh*var(--aspect))] bg-placeholder bg-(image:--lqip) bg-cover has-[[data-loaded]]:bg-none';
+const frameStyle =
+  [
+    lqip && `--lqip: url("${lqip}")`,
+    viewTransitionName && `view-transition-name: ${viewTransitionName}; view-transition-class: image-morph`,
+  ]
+    .filter(Boolean)
+    .join('; ') || undefined;
+const frameAttrs = { style: frameStyle, 'data-view-transition': viewTransitionName ? '' : undefined };
+---
+
+<figure class={className} style={width && height ? `--aspect: ${width / height}` : undefined}>
+  {
+    zoomable ? (
+      <button
+        type="button"
+        class:list={[
+          frameClass,
+          'cursor-zoom-in focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground',
+        ]}
+        aria-label={alt ? `Enlarge image: ${alt}` : 'Enlarge image'}
+        aria-haspopup="dialog"
+        data-lightbox-trigger
+        {...frameAttrs}
+      >
+        <ResponsiveImage {...imageProps} />
+      </button>
+    ) : (
+      <div class={frameClass} {...frameAttrs}>
+        <ResponsiveImage {...imageProps} />
+      </div>
+    )
+  }
+  {
+    image.caption && (
+      <figcaption class={hideCaption ? 'sr-only' : 'mt-2 text-meta text-muted'}>{image.caption}</figcaption>
+    )
+  }
+</figure>
