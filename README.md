@@ -148,7 +148,7 @@ About, Contact, Imprint, Privacy and Settings exist exactly once and cannot be d
 - Projects without a cover image appear in the navigation, but not in the slideshow.
 - If **Content** is empty, the project page shows the cover image.
 - Every project page ends with a link to the next project in the order (after the last, the first).
-- If a project page starts with its cover image, clicking the cover in the slideshow lets it grow into place on the project page (in browsers with View Transitions).
+- If a project page starts with its cover image, clicking the cover in the slideshow, or the project name in the navigation while its cover is shown, lets the cover grow into place on the project page (in browsers with View Transitions).
 - Tip: number the projects in steps of 10 (10, 20, 30, …) so you can insert new ones in between.
 
 ### Images

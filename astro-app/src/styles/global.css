@@ -85,7 +85,11 @@
   animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-/* Only the visible slide takes part: a hidden one would fly in from nowhere. */
-[data-slide]:not([data-active]) [data-view-transition] {
+/* Only the visible slide or hover preview takes part: a hidden one would fly in from nowhere. */
+[data-slide]:not([data-active]) [data-view-transition],
+[data-hover-preview]:not([data-active]) [data-view-transition],
+/* While a hover preview covers the page (Layout), the page's own images stay out: they are hidden, and the
+   slideshow's visible slide would share the preview's name. */
+[data-previewing] > :not([data-hover-previews]) [data-view-transition] {
   view-transition-name: none !important;
 }

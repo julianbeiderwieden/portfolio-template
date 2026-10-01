@@ -177,7 +177,8 @@ const websiteJsonLd = {
                     class="col-start-1 row-start-1 opacity-0 transition-opacity duration-150 ease-out data-active:opacity-100 data-active:duration-200 motion-reduce:transition-none"
                     data-hover-preview={slug}
                   >
-                    <Figure image={coverImage} />
+                    {/* Clicking the title then grows the preview into the project page, like the cover slideshow. */}
+                    <Figure image={coverImage} viewTransitionName={`cover-${slug}`} />
                   </div>
                 ))}
               </div>
