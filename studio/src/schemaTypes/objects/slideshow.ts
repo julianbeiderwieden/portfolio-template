@@ -19,11 +19,12 @@ export default defineType({
     }),
   ],
   preview: {
-    select: {images: 'images', media: 'images.0'},
-    prepare: ({images, media}) => ({
+    // Selecting `images.0` as well makes Studio fetch only that index, so `images` is no longer the array.
+    select: {images: 'images'},
+    prepare: ({images}) => ({
       title: 'Slideshow',
       subtitle: images?.length === 1 ? '1 image' : `${images?.length ?? 0} images`,
-      media,
+      media: images?.[0],
     }),
   },
 })
