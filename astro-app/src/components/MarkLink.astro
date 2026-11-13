@@ -1,15 +1,45 @@
 ---
-import type { Props } from 'astro-portabletext/types';
-import type { PortableTextMarkDefinition } from '@portabletext/types';
+import type { MarkProps } from 'astro-portabletext/types';
 
-interface LinkMark extends PortableTextMarkDefinition {
-  href: string;
+interface LinkMark {
+  href?: string;
   blank?: boolean;
 }
 
-const { node } = Astro.props as Props<LinkMark>;
+interface TextNode {
+  text?: string;
+  children?: TextNode[];
+}
+
+const { node } = Astro.props as MarkProps<LinkMark>;
+const href = resolveLinkHref(node.markDef?.href, linkText(node));
+const blank = Boolean(href && node.markDef?.blank);
+
+/** Annotation values live on `markDef`. An empty URL still links when the text is an address. */
+function linkText(value: { children?: TextNode[] }): string {
+  return (value.children ?? []).map(child => (typeof child.text === 'string' ? child.text : linkText(child))).join('');
+}
+
+function resolveLinkHref(raw: string | undefined, text: string): string | undefined {
+  const value = (raw?.trim() || text.trim()).replace(/\s+/g, ' ');
+  if (!value) return undefined;
+  if (value.startsWith('/') && !value.startsWith('//')) return value;
+  if (/^(https?:|mailto:|tel:)/i.test(value)) return value;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return `mailto:${value}`;
+  if (/^[+()\d\s.-]{6,}$/.test(value) && (value.match(/\d/g)?.length ?? 0) >= 6) {
+    return `tel:${value.replace(/[^\d+]/g, '')}`;
+  }
+  if (/^(?:[\w-]+\.)+[a-z]{2,}(?:[/?#].*)?$/i.test(value)) return `https://${value}`;
+  return undefined;
+}
 ---
 
-<a href={node.href} target={node.blank ? '_blank' : undefined} rel={node.blank ? 'noopener noreferrer' : undefined}
-  ><slot /></a
->
+{
+  href ? (
+    <a href={href} target={blank ? '_blank' : undefined} rel={blank ? 'noopener noreferrer' : undefined}>
+      <slot />
+    </a>
+  ) : (
+    <slot />
+  )
+}
