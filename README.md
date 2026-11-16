@@ -312,6 +312,7 @@ Run in the repository root:
 | `npm run build`                     | Type check (`astro check`, `tsc`) and build the website into `astro-app/dist`           |
 | `npm run format`                    | Format all files with Prettier                                                          |
 | `npm run format:check`              | Check formatting without changing files                                                 |
+| `npm run lint --workspace=studio`   | Lint the Studio code with ESLint                                                        |
 | `npm run seed --workspace=studio`   | Import the demo content (overwrites, see [step 4](#4-import-the-demo-content-optional)) |
 | `npm run deploy --workspace=studio` | Deploy the Studio to `sanity.studio`                                                    |
 

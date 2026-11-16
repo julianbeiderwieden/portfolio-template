@@ -15,8 +15,8 @@
     "astro-app"
   ],
   "devDependencies": {
-    "concurrently": "^10.0.3",
-    "prettier": "^3.8.3",
+    "concurrently": "^10.0.7",
+    "prettier": "^3.10.1",
     "prettier-plugin-astro": "^0.14.1"
   },
   "type": "module"
