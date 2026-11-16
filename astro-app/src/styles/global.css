@@ -58,8 +58,10 @@
     color-scheme: dark;
   }
 
+  /* Long words and URLs without spaces break where they would overflow, instead of widening the page. `anywhere`,
+     not `break-word`: it also lets flex items and inline blocks shrink below the longest word. */
   body {
-    @apply text-pretty;
+    @apply text-pretty wrap-anywhere;
   }
 
   /* text-wrap inherits, so headings must override the body value. */

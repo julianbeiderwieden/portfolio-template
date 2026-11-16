@@ -18,7 +18,9 @@ const isHome = path === '/';
 const projectsIndex = path === '/projects';
 
 /** current: the route's own link, stays black while another link is hovered.
- *  highlighted: black by default (all links on `/`, all titles on `/projects`), gray while another link is hovered. */
+ *  highlighted: black by default (all links on `/`, all titles on `/projects`), gray while another link is hovered.
+ *  Only with a mouse: a tap leaves its link in :hover, and on touch screens Tailwind's `not-hover` matches every
+ *  link, the tapped one too, so they would all turn gray. */
 type LinkState = 'current' | 'highlighted' | 'inactive';
 
 const links = [
@@ -40,14 +42,14 @@ const legalLinkClass = 'text-foreground focus-visible:underline focus-visible:ou
 const navLinkClass = (state: LinkState) =>
   ({
     current: `${linkBase} text-foreground`,
-    highlighted: `${linkBase} text-foreground group-has-[a:hover]/nav:not-hover:text-muted`,
+    highlighted: `${linkBase} text-foreground [@media(hover:hover)]:group-has-[a:hover]/nav:not-hover:text-muted`,
     inactive: `${linkBase} text-muted`,
   })[state];
 
 /** Project titles belong to "Projects": hovering it leaves them black, only other links gray them. */
 const projectLinkClass = (state: LinkState) =>
   state === 'highlighted'
-    ? `${linkBase} text-foreground group-has-[a:not([href='/projects']):hover]/nav:not-hover:text-muted`
+    ? `${linkBase} text-foreground [@media(hover:hover)]:group-has-[a:not([href='/projects']):hover]/nav:not-hover:text-muted`
     : navLinkClass(state);
 ---
 
@@ -58,7 +60,14 @@ const projectLinkClass = (state: LinkState) =>
   <a href="/" class="text-body tracking-tight">{siteTitle}</a>
 
   <nav aria-label="Main navigation" class="group/nav mt-8 md:mt-12">
-    <ul class="text-body max-md:text-[1.75rem] tracking-tight">
+    {/* The link classes per state let the script show the target page's colors as soon as a link is clicked. */}
+    <ul
+      class="text-body max-md:text-[1.75rem] tracking-tight"
+      data-main-links
+      data-current={navLinkClass('current')}
+      data-highlighted={navLinkClass('highlighted')}
+      data-inactive={navLinkClass('inactive')}
+    >
       {
         links.map(link => (
           <li>
@@ -142,6 +151,9 @@ const projectLinkClass = (state: LinkState) =>
   const FADE_OUT_MS = 150;
   const COLLAPSE_DELAY_MS = 50;
   const COLLAPSE_MS = 250;
+  // Link colors after a click: the links' own transition (transition-colors duration-150, Tailwind's default curve).
+  const COLOR_MS = 150;
+  const COLOR_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)';
 
   /**
    * The list opens or closes the moment a navigation starts, on the old page, instead of once the new page has
@@ -150,14 +162,59 @@ const projectLinkClass = (state: LinkState) =>
    */
   let running: { opening: boolean; start: number; ghost?: HTMLElement } | undefined;
 
+  /** The links' colors at the click, by URL: the new page's links finish the fade from them. */
+  let colorFade: { start: number; from: Map<string, string> } | undefined;
+
   type LinkState = 'current' | 'highlighted' | 'inactive';
 
-  /** The link colors the target page will render, so nothing changes when it arrives. */
-  function setLinkStates(list: HTMLElement, path: string) {
-    for (const link of list.querySelectorAll('a')) {
-      const state: LinkState =
-        link.getAttribute('href') === path ? 'current' : path === '/projects' ? 'highlighted' : 'inactive';
-      link.className = list.dataset[state] ?? link.className;
+  /** Gives the links the classes of their state, as kept in the list's data attributes. */
+  function applyStates(
+    list: HTMLElement,
+    links: NodeListOf<HTMLAnchorElement>,
+    stateOf: (href: string | null) => LinkState,
+  ) {
+    for (const link of links) link.className = list.dataset[stateOf(link.getAttribute('href'))] ?? link.className;
+  }
+
+  /**
+   * The link colors the target page will render, from the moment a link is clicked: touch screens have no hover,
+   * so the tapped link would otherwise stay gray until the new page has loaded. The links' color transition fades
+   * them; if the new page arrives first, its links finish the fade (continueColorFade).
+   */
+  function setLinkStates(to: string) {
+    const main = document.querySelector<HTMLElement>('[data-main-links]');
+    if (!main) return;
+    // The titles of a list that is about to open have no color to fade from: they appear in their new one.
+    const from = new Map<string, string>();
+    for (const link of main.querySelectorAll('a')) {
+      if (!link.closest('[hidden]')) from.set(link.href, getComputedStyle(link).color);
+    }
+    colorFade = { start: performance.now(), from };
+    applyStates(main, main.querySelectorAll<HTMLAnchorElement>(':scope > li > a'), href =>
+      (href === '/projects' ? isProjectsPath(to) : href === to) ? 'current' : to === '/' ? 'highlighted' : 'inactive',
+    );
+    // The titles only where the list stays: a closing list keeps its colors while it fades out.
+    const list = document.getElementById('project-list');
+    if (list && isProjectsPath(to)) {
+      applyStates(list, list.querySelectorAll('a'), href =>
+        href === to ? 'current' : to === '/projects' ? 'highlighted' : 'inactive',
+      );
+    }
+  }
+
+  /** The new page's links pick up a color fade that is still running, at the same point. */
+  function continueColorFade() {
+    const fade = colorFade;
+    colorFade = undefined;
+    if (!fade) return;
+    const elapsed = performance.now() - fade.start;
+    if (elapsed >= COLOR_MS) return;
+    for (const link of document.querySelectorAll<HTMLAnchorElement>('[data-main-links] a')) {
+      const from = fade.from.get(link.href);
+      const to = getComputedStyle(link).color;
+      if (!from || from === to) continue;
+      const animation = link.animate([{ color: from }, { color: to }], { duration: COLOR_MS, easing: COLOR_EASING });
+      animation.currentTime = elapsed;
     }
   }
 
@@ -212,16 +269,16 @@ const projectLinkClass = (state: LinkState) =>
 
   document.addEventListener('astro:before-preparation', event => {
     running = undefined;
+    const to = currentPath(event.to);
+    setLinkStates(to);
     const list = document.getElementById('project-list');
     if (!list || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const to = currentPath(event.to);
     const opening = isProjectsPath(to);
     // Shown on both pages or on neither: nothing to animate.
     if (opening === !list.hidden) return;
 
     running = { opening, start: performance.now() };
     if (opening) {
-      setLinkStates(list, to);
       list.hidden = false;
       reveal(list);
     } else {
@@ -235,6 +292,7 @@ const projectLinkClass = (state: LinkState) =>
   });
 
   document.addEventListener('astro:after-swap', () => {
+    continueColorFade();
     const animation = running;
     running = undefined;
     if (!animation) return;

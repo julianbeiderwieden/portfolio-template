@@ -7,9 +7,11 @@ import IconButton from './IconButton.astro';
 const slots = 5;
 ---
 
+{/* Focusable itself: opened with a pointer, it takes the focus instead of the close button (see open). */}
 <dialog
-  class="fixed inset-0 m-0 size-full max-h-none max-w-none cursor-zoom-out overflow-hidden bg-transparent p-0 text-foreground backdrop:bg-transparent"
+  class="fixed inset-0 m-0 size-full max-h-none max-w-none cursor-zoom-out overflow-hidden bg-transparent p-0 text-foreground outline-none backdrop:bg-transparent"
   aria-label="Image viewer"
+  tabindex="-1"
   data-lightbox
 >
   <div class="absolute inset-0 bg-background opacity-0" data-lightbox-backdrop></div>
@@ -161,6 +163,12 @@ const slots = 5;
     const root = document.documentElement;
 
     let state: 'closed' | 'opening' | 'open' | 'closing' = 'closed';
+    /**
+     * Opened from the keyboard: the focus goes to the close button and back to the image, with a focus ring.
+     * Opened with a pointer, it stays on the dialog itself: touch screens would ring the button as if from the
+     * keyboard.
+     */
+    let viaKeyboard = false;
     /** The image the lightbox opened with: strip positions count from it. */
     let start = 0;
     /** The strip position shown, or being slid to, and the image there. */
@@ -481,9 +489,10 @@ const slots = 5;
       root.style.removeProperty('padding-right');
     }
 
-    async function open(index: number) {
+    async function open(index: number, keyboard: boolean) {
       if (state !== 'closed') return;
       state = 'opening';
+      viaKeyboard = keyboard;
       start = index;
       view = 0;
       // Slots from last time stay hidden until filled again.
@@ -499,7 +508,8 @@ const slots = 5;
       morph = !matchMedia('(prefers-reduced-motion: reduce)').matches;
       const from = items[index].thumb.getBoundingClientRect();
       lockScroll();
-      dialog!.showModal();
+      dialog!.showModal(); // Focuses the close button.
+      if (!viaKeyboard) dialog!.focus({ preventScroll: true });
       pageWidth = dialog!.clientWidth;
       slide(0);
       layoutSlot(slot);
@@ -581,7 +591,8 @@ const slots = 5;
         slot.caption.style.removeProperty('transition');
         slot.caption.style.opacity = '';
       }
-      if (wasShown) trigger.focus({ preventScroll: true });
+      // With a pointer, closing the dialog has already put the focus back where it was before.
+      if (wasShown && viaKeyboard) trigger.focus({ preventScroll: true });
       document.dispatchEvent(new CustomEvent('lightbox:change', { detail: {} }));
     }
 
@@ -622,7 +633,10 @@ const slots = 5;
       turn(step as 1 | -1, x, morph ? duration : Math.min(duration, FADE_MS));
     }
 
-    items.forEach(({ trigger }, index) => trigger.addEventListener('click', () => open(index), { signal }));
+    // Enter and Space click with a detail of 0, pointers with their click count.
+    items.forEach(({ trigger }, index) =>
+      trigger.addEventListener('click', event => open(index, event.detail === 0), { signal }),
+    );
     prev.addEventListener('click', () => go(-1), { signal });
     next.addEventListener('click', () => go(1), { signal });
     part('close').addEventListener('click', close, { signal });
